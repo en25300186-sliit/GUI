@@ -116,7 +116,8 @@ class NeuralWorld:
     _ROW_CORNER_RADIUS = 6
     _ROW_BORDER_THICKNESS = 7
     _ROW_SOFTNESS = 8
-    _ROW_RESERVED_SHADER_PARAM = 9  # Reserved for future per-instance shader attributes.
+    _ROW_COSTUME_ID = 9
+    _ROW_RESERVED_SHADER_PARAM = _ROW_COSTUME_ID  # Backward-compatible alias.
     _WORLD_COLUMNS = 10
     _MOTION_COLUMNS = 6
     _MOTION_POSITION_AXES = (_ROW_X, _ROW_Y)
@@ -154,6 +155,10 @@ class NeuralWorld:
             self.color_tensor = self.xp.zeros((self._capacity, self._COLOR_CHANNELS), dtype=self.xp.float32)
             self._global_tensor = self.xp.zeros((self._capacity, self._WORLD_COLUMNS), dtype=self.xp.float32)
             self._parent_index = self.xp.full((self._capacity,), -1, dtype=self.xp.int32)
+            self._animation_start_layer = self.xp.full((self._capacity,), -1, dtype=self.xp.float32)
+            self._animation_frame_count = self.xp.zeros((self._capacity,), dtype=self.xp.float32)
+            self._animation_fps = self.xp.zeros((self._capacity,), dtype=self.xp.float32)
+            self._animation_accumulator = self.xp.zeros((self._capacity,), dtype=self.xp.float32)
         elif np is not None:
             self.xp = np
             self.backend = "numpy"
@@ -162,6 +167,10 @@ class NeuralWorld:
             self.color_tensor = self.xp.zeros((self._capacity, self._COLOR_CHANNELS), dtype=self.xp.float32)
             self._global_tensor = self.xp.zeros((self._capacity, self._WORLD_COLUMNS), dtype=self.xp.float32)
             self._parent_index = self.xp.full((self._capacity,), -1, dtype=self.xp.int32)
+            self._animation_start_layer = self.xp.full((self._capacity,), -1, dtype=self.xp.float32)
+            self._animation_frame_count = self.xp.zeros((self._capacity,), dtype=self.xp.float32)
+            self._animation_fps = self.xp.zeros((self._capacity,), dtype=self.xp.float32)
+            self._animation_accumulator = self.xp.zeros((self._capacity,), dtype=self.xp.float32)
         else:
             self.xp = None
             self.backend = "python"
@@ -170,6 +179,10 @@ class NeuralWorld:
             self.color_tensor: List[List[float]] = []
             self._python_global_rows: List[List[float]] = []
             self._python_parent_index: List[int] = []
+            self._python_animation_start_layer: List[float] = []
+            self._python_animation_frame_count: List[float] = []
+            self._python_animation_fps: List[float] = []
+            self._python_animation_accumulator: List[float] = []
         self._objects: List[Object] = []
         self._index_to_object: Dict[int, Object] = {}
         self._last_hover_index: Optional[int] = None
@@ -209,6 +222,12 @@ class NeuralWorld:
         self._global_tensor = self.xp.concatenate((self._global_tensor, world_zeros), axis=0)
         parent_padding = self.xp.full((expand_by,), -1, dtype=self.xp.int32)
         self._parent_index = self.xp.concatenate((self._parent_index, parent_padding), axis=0)
+        anim_start_padding = self.xp.full((expand_by,), -1, dtype=self.xp.float32)
+        anim_zero_padding = self.xp.zeros((expand_by,), dtype=self.xp.float32)
+        self._animation_start_layer = self.xp.concatenate((self._animation_start_layer, anim_start_padding), axis=0)
+        self._animation_frame_count = self.xp.concatenate((self._animation_frame_count, anim_zero_padding), axis=0)
+        self._animation_fps = self.xp.concatenate((self._animation_fps, anim_zero_padding), axis=0)
+        self._animation_accumulator = self.xp.concatenate((self._animation_accumulator, anim_zero_padding), axis=0)
         self._capacity = new_capacity
 
     def _register_single(self, obj: Object, parent_index: int = -1) -> int:
@@ -223,13 +242,17 @@ class NeuralWorld:
             corner_radius,
             self._DEFAULT_BORDER_THICKNESS,
             self._DEFAULT_SOFTNESS,
-            0.0,
+            -1.0,
         ]
         if self.backend == "python":
             self.world_tensor.append(row)
             self.velocity_tensor.append([0.0] * self._MOTION_COLUMNS)
             self._python_parent_index.append(parent_index)
             self._python_global_rows.append(row[:])
+            self._python_animation_start_layer.append(-1.0)
+            self._python_animation_frame_count.append(0.0)
+            self._python_animation_fps.append(0.0)
+            self._python_animation_accumulator.append(0.0)
             index = len(self.world_tensor) - 1
             initial_color = self._initial_color_for_index(index)
             self.color_tensor.append(list(initial_color))
@@ -243,6 +266,10 @@ class NeuralWorld:
             self.color_tensor[index, :] = self.xp.asarray(initial_color, dtype=self.xp.float32)
             self._parent_index[index] = int(parent_index)
             self._global_tensor[index, :] = row_tensor
+            self._animation_start_layer[index] = -1.0
+            self._animation_frame_count[index] = 0.0
+            self._animation_fps[index] = 0.0
+            self._animation_accumulator[index] = 0.0
             self._size += 1
         obj._bind_view(self, index)
         self._objects.append(obj)
@@ -274,6 +301,52 @@ class NeuralWorld:
             self.color_tensor[index] = [r, g, b]
         else:
             self.color_tensor[index, :] = self.xp.asarray([r, g, b], dtype=self.xp.float32)
+
+    def set_costume_id(self, index: int, costume_id: float) -> None:
+        if index < 0 or index >= self.size:
+            raise IndexError("Object index out of bounds")
+        costume_value = float(costume_id)
+        if self.backend == "python":
+            self.world_tensor[index][self._ROW_COSTUME_ID] = costume_value
+            self._python_global_rows[index][self._ROW_COSTUME_ID] = costume_value
+            return
+        self.world_tensor[index, self._ROW_COSTUME_ID] = costume_value
+        self._global_tensor[index, self._ROW_COSTUME_ID] = costume_value
+
+    def configure_sprite_animation(self, index: int, frame_layers: Sequence[int], fps: float) -> None:
+        if index < 0 or index >= self.size:
+            raise IndexError("Object index out of bounds")
+        if fps < 0:
+            raise ValueError("fps must be non-negative")
+        if len(frame_layers) == 0:
+            self.set_costume_id(index, -1.0)
+            if self.backend == "python":
+                self._python_animation_start_layer[index] = -1.0
+                self._python_animation_frame_count[index] = 0.0
+                self._python_animation_fps[index] = 0.0
+                self._python_animation_accumulator[index] = 0.0
+                return
+            self._animation_start_layer[index] = -1.0
+            self._animation_frame_count[index] = 0.0
+            self._animation_fps[index] = 0.0
+            self._animation_accumulator[index] = 0.0
+            return
+
+        start_layer = int(frame_layers[0])
+        frame_count = len(frame_layers)
+        if any(int(start_layer + offset) != int(layer) for offset, layer in enumerate(frame_layers)):
+            raise ValueError("frame_layers must be contiguous texture-array layer IDs")
+        self.set_costume_id(index, float(start_layer))
+        if self.backend == "python":
+            self._python_animation_start_layer[index] = float(start_layer)
+            self._python_animation_frame_count[index] = float(frame_count)
+            self._python_animation_fps[index] = float(fps)
+            self._python_animation_accumulator[index] = 0.0
+            return
+        self._animation_start_layer[index] = float(start_layer)
+        self._animation_frame_count[index] = float(frame_count)
+        self._animation_fps[index] = float(fps)
+        self._animation_accumulator[index] = 0.0
 
     def set_default_color(self, color: Sequence[float]) -> None:
         if len(color) != self._COLOR_CHANNELS:
@@ -311,14 +384,15 @@ class NeuralWorld:
         # Ignore negligible timesteps to avoid needless tensor work for near-zero frame deltas.
         if abs(float(dt)) < 1e-9:
             return
+        dt_value = float(dt)
         if self.backend == "python":
             active_state = float(ObjectState.ACTIVE)
             out_of_screen_state = float(ObjectState.OUTOFSCREEN)
             for idx in range(len(self.world_tensor)):
                 row = self.world_tensor[idx]
                 vel = self.velocity_tensor[idx]
-                row[self._ROW_X] += vel[self._ROW_X] * dt
-                row[self._ROW_Y] += vel[self._ROW_Y] * dt
+                row[self._ROW_X] += vel[self._ROW_X] * dt_value
+                row[self._ROW_Y] += vel[self._ROW_Y] * dt_value
                 self._apply_position_friction(vel)
                 tracked = row[self._ROW_STATE] in (active_state, out_of_screen_state)
                 outside_screen = (
@@ -332,6 +406,19 @@ class NeuralWorld:
                     row[self._ROW_STATE] = out_of_screen_state
                 elif row[self._ROW_STATE] == out_of_screen_state and reentered:
                     row[self._ROW_STATE] = active_state
+                frame_count = int(self._python_animation_frame_count[idx])
+                fps = self._python_animation_fps[idx]
+                if dt_value > 0.0 and frame_count > 1 and fps > 0.0:
+                    start_layer = self._python_animation_start_layer[idx]
+                    self._python_animation_accumulator[idx] += dt_value * fps
+                    advanced_frames = int(self._python_animation_accumulator[idx])
+                    if advanced_frames > 0:
+                        self._python_animation_accumulator[idx] -= float(advanced_frames)
+                        current_frame = int(row[self._ROW_COSTUME_ID] - start_layer)
+                        if current_frame < 0 or current_frame >= frame_count:
+                            current_frame = 0
+                        next_frame = (current_frame + advanced_frames) % frame_count
+                        row[self._ROW_COSTUME_ID] = start_layer + float(next_frame)
             self._global_dirty = True
             return
 
@@ -339,7 +426,7 @@ class NeuralWorld:
             return
         rows = self.world_tensor[: self._size]
         velocity = self.velocity_tensor[: self._size]
-        rows[:, self._MOTION_POSITION_SLICE] += velocity[:, self._MOTION_POSITION_SLICE] * float(dt)
+        rows[:, self._MOTION_POSITION_SLICE] += velocity[:, self._MOTION_POSITION_SLICE] * dt_value
         self._apply_position_friction(velocity)
         self._global_dirty = True
         self._sync_global_transforms()
@@ -357,6 +444,28 @@ class NeuralWorld:
         states[(states == float(ObjectState.OUTOFSCREEN)) & inside_reactivate] = float(ObjectState.ACTIVE)
         rows[:, self._ROW_STATE] = states
         global_rows[:, self._ROW_STATE] = states
+        if dt_value <= 0.0:
+            return
+        frame_count = self._animation_frame_count[: self._size]
+        fps = self._animation_fps[: self._size]
+        active_animation = (frame_count > 1.0) & (fps > 0.0)
+        if not bool(self._to_scalar(active_animation.any())):
+            return
+        self._animation_accumulator[: self._size] += dt_value * fps
+        advanced_frames = self.xp.floor(self._animation_accumulator[: self._size]).astype(self.xp.int32)
+        active_advancement = active_animation & (advanced_frames > 0)
+        if not bool(self._to_scalar(active_advancement.any())):
+            return
+        self._animation_accumulator[: self._size][active_advancement] -= advanced_frames[active_advancement]
+        start_layer = self._animation_start_layer[: self._size]
+        current_costume = rows[:, self._ROW_COSTUME_ID]
+        relative_frame = current_costume - start_layer
+        invalid_frame = (relative_frame < 0.0) | (relative_frame >= frame_count)
+        relative_frame = self.xp.where(invalid_frame, 0.0, relative_frame)
+        next_frame = self.xp.mod(relative_frame + advanced_frames.astype(self.xp.float32), frame_count)
+        next_costume = start_layer + next_frame
+        rows[:, self._ROW_COSTUME_ID] = self.xp.where(active_advancement, next_costume, current_costume)
+        global_rows[:, self._ROW_COSTUME_ID] = rows[:, self._ROW_COSTUME_ID]
 
     def _sync_global_transforms(self) -> None:
         if not self._global_dirty:
@@ -560,6 +669,92 @@ class NeuralWorld:
         return None
 
 
+class TextureManager:
+    def __init__(self, ctx) -> None:
+        if np is None:
+            raise RuntimeError("TextureManager requires numpy")
+        self._ctx = ctx
+        self._path_to_layer: Dict[str, int] = {}
+        self._layer_pixels: List[Any] = []
+        self._texture_array = None
+        self._width: Optional[int] = None
+        self._height: Optional[int] = None
+        self._dirty = False
+
+    def register_image(self, image_path: str) -> int:
+        normalized_path = str(Path(image_path).expanduser().resolve())
+        existing = self._path_to_layer.get(normalized_path)
+        if existing is not None:
+            return existing
+        pixels = self._load_rgba_pixels(normalized_path)
+        height, width = int(pixels.shape[0]), int(pixels.shape[1])
+        if self._width is None or self._height is None:
+            self._width = width
+            self._height = height
+        elif width != self._width or height != self._height:
+            raise ValueError(
+                f"Texture {normalized_path} has size {width}x{height}, expected {self._width}x{self._height} for array packing"
+            )
+        layer_id = len(self._layer_pixels)
+        self._layer_pixels.append(pixels)
+        self._path_to_layer[normalized_path] = layer_id
+        self._dirty = True
+        return layer_id
+
+    def register_images(self, image_paths: Sequence[str]) -> List[int]:
+        return [self.register_image(path) for path in image_paths]
+
+    def texture_array(self):
+        self._ensure_uploaded()
+        return self._texture_array
+
+    def bind(self, location: int = 0) -> None:
+        texture = self.texture_array()
+        if texture is not None:
+            texture.use(location=location)
+
+    @staticmethod
+    def _load_rgba_pixels(path: str):
+        if Image is not None:
+            with Image.open(path) as image:
+                rgba_image = image.convert("RGBA")
+                return np.array(rgba_image, dtype=np.uint8)
+        if cv2 is not None:
+            image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+            if image is None:
+                raise ValueError(f"Failed to load image: {path}")
+            if len(image.shape) == 2:
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGBA)
+            elif image.shape[2] == 3:
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGBA)
+            elif image.shape[2] == 4:
+                image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
+            else:
+                raise ValueError(f"Unsupported channel count in image: {path}")
+            return image.astype(np.uint8)
+        raise RuntimeError("Texture loading requires Pillow or OpenCV")
+
+    def _ensure_uploaded(self) -> None:
+        if not self._dirty:
+            return
+        if not self._layer_pixels:
+            return
+        if self._texture_array is not None:
+            self._texture_array.release()
+            self._texture_array = None
+        stacked_pixels = np.stack(self._layer_pixels, axis=0)
+        self._texture_array = self._ctx.texture_array(
+            (int(self._width), int(self._height), len(self._layer_pixels)),
+            components=4,
+            data=stacked_pixels.tobytes(),
+            dtype="f1",
+        )
+        self._texture_array.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._texture_array.repeat_x = False
+        self._texture_array.repeat_y = False
+        self._dirty = False
+
+
 class ModernGLRenderer:
     _VERTEX_FLOATS = 5
     _FLOAT_SIZE_BYTES = 4
@@ -734,7 +929,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         NeuralWorld._ROW_CORNER_RADIUS,
         NeuralWorld._ROW_BORDER_THICKNESS,
         NeuralWorld._ROW_SOFTNESS,
-        NeuralWorld._ROW_RESERVED_SHADER_PARAM,
+        NeuralWorld._ROW_COSTUME_ID,
     )
 
     def __init__(self, *args, random_object_colors: bool = False, **kwargs) -> None:
@@ -744,6 +939,8 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._quad_vbo = None
         self._instance_data_vbo = None
         self._instance_color_vbo = None
+        self._texture_manager = None
+        self._sprite_configured: Dict[int, bool] = {}
         if not self.random_object_colors:
             self.world.set_default_color(self.object_color)
 
@@ -760,6 +957,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             return
         if self.world.size == 0:
             return
+        self._sync_sprite_costumes()
         self.world.sync_global_transforms()
         rows = self.world._global_tensor[: self.world.size]
         instance_data_tensor = rows[:, self._INSTANCE_DATA_COLUMNS]
@@ -773,6 +971,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         hover_index = self.world.hover_index()
         self._program["hover_index"].value = -1 if hover_index is None else int(hover_index)
         self._program["hover_color"].value = self.hover_color
+        self._texture_manager.bind(location=0)
         if len(data_payload) > self._instance_data_vbo.size:
             self._instance_data_vbo.orphan(len(data_payload))
         if len(color_payload) > self._instance_color_vbo.size:
@@ -796,6 +995,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         glfw.swap_interval(1 if self.vsync else 0)
 
         self._ctx = moderngl.create_context()
+        self._texture_manager = TextureManager(self._ctx)
         self._program = self._ctx.program(
             vertex_shader="""
                 #version 330
@@ -806,12 +1006,14 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 in vec2 in_vert;
                 in vec4 in_data;
                 in float in_state;
-                in vec4 in_params;
+                in vec3 in_params;
+                in float in_costume_id;
                 in vec3 in_color;
                 out vec3 v_color;
                 out vec2 v_local_pos;
                 out vec2 v_half_size;
-                out vec4 v_params;
+                out vec3 v_params;
+                out float v_costume_id;
                 void main() {
                     float visible = in_state == active_state ? 1.0 : 0.0;
                     vec2 scale = in_data.zw * visible;
@@ -822,6 +1024,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     v_local_pos = in_vert * in_data.zw;
                     v_half_size = in_data.zw;
                     v_params = in_params;
+                    v_costume_id = in_costume_id;
                 }
             """,
             fragment_shader=Template(
@@ -839,10 +1042,12 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 const float SHADOW_CONTRIBUTION = $shadow_contribution;
                 const float GLOW_ALPHA_CONTRIBUTION = $glow_alpha_contribution;
                 const float ALPHA_DISCARD_THRESHOLD = $alpha_discard_threshold;
+                uniform sampler2DArray texture_array;
                 in vec3 v_color;
                 in vec2 v_local_pos;
                 in vec2 v_half_size;
-                in vec4 v_params;
+                in vec3 v_params;
+                in float v_costume_id;
                 out vec4 fragColor;
 
                 float roundedBoxSdf(vec2 point, vec2 halfSize, float radius) {
@@ -851,6 +1056,14 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 }
 
                 void main() {
+                    if (v_costume_id >= 0.0) {
+                        vec2 uv = (v_local_pos / (v_half_size * 2.0)) + vec2(0.5);
+                        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+                            discard;
+                        }
+                        fragColor = texture(texture_array, vec3(clamp(uv, 0.0, 1.0), v_costume_id));
+                        return;
+                    }
                     float cornerRadius = clamp(v_params.x, 0.0, min(v_half_size.x, v_half_size.y));
                     float borderThickness = max(v_params.y, 0.0);
                     float softness = max(v_params.z, MIN_SOFTNESS);
@@ -897,15 +1110,31 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._quad_vbo = self._ctx.buffer(quad.tobytes())
         self._instance_data_vbo = self._ctx.buffer(reserve=self._INITIAL_INSTANCE_DATA_BUFFER_SIZE)
         self._instance_color_vbo = self._ctx.buffer(reserve=self._INITIAL_INSTANCE_COLOR_BUFFER_SIZE)
+        self._program["texture_array"].value = 0
         self._vao = self._ctx.vertex_array(
             self._program,
             [
                 (self._quad_vbo, "2f", "in_vert"),
-                (self._instance_data_vbo, "4f 1f 4f /i", "in_data", "in_state", "in_params"),
+                (self._instance_data_vbo, "4f 1f 3f 1f /i", "in_data", "in_state", "in_params", "in_costume_id"),
                 (self._instance_color_vbo, "3f /i", "in_color"),
             ],
         )
         return self.window
+
+    def _sync_sprite_costumes(self) -> None:
+        if self._texture_manager is None:
+            return
+        for obj in self.world._objects:
+            if not isinstance(obj, SpriteObject):
+                continue
+            if obj.tensor_index is None:
+                continue
+            if self._sprite_configured.get(obj.tensor_index):
+                continue
+            layer_ids = self._texture_manager.register_images(obj.costumes)
+            obj._texture_layers = layer_ids
+            self.world.configure_sprite_animation(obj.tensor_index, layer_ids, obj.fps)
+            self._sprite_configured[obj.tensor_index] = True
 
 
 
