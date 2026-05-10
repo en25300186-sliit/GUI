@@ -41,6 +41,12 @@ DIR_UP = 3
 
 THREAD_SHUTDOWN_TIMEOUT = 1.0
 
+# World-coordinate bounds that the player cannot leave
+WORLD_MIN_X = -1.0
+WORLD_MAX_X = 1.0
+WORLD_MIN_Y = -1.0
+WORLD_MAX_Y = 1.0
+
 
 def _window_should_close(renderer: nui.InstancedModernGLRenderer) -> bool:
     if renderer.window is None or nui.glfw is None:
@@ -88,7 +94,7 @@ def main() -> None:
     world.configure_sprite_animation(player_index, row_layers(DIR_DOWN), 0.0)
 
     # --- Keyboard state (updated from GLFW callback on the main thread) ---
-    keys_pressed: set = set()
+    keys_pressed: set[int] = set()
     keys_lock = threading.Lock()
 
     def key_callback(window, key, scancode, action, mods):
@@ -126,21 +132,26 @@ def main() -> None:
             new_direction = current_direction
             new_moving = False
 
+            # Direction priority: up > down > left > right.  Each axis is
+            # accumulated independently so diagonal movement is supported.
             if nui.glfw.KEY_W in keys or nui.glfw.KEY_UP in keys:
                 dy += MOVE_SPEED * dt
                 new_direction = DIR_UP
                 new_moving = True
-            if nui.glfw.KEY_S in keys or nui.glfw.KEY_DOWN in keys:
+            elif nui.glfw.KEY_S in keys or nui.glfw.KEY_DOWN in keys:
                 dy -= MOVE_SPEED * dt
                 new_direction = DIR_DOWN
                 new_moving = True
+
             if nui.glfw.KEY_A in keys or nui.glfw.KEY_LEFT in keys:
                 dx -= MOVE_SPEED * dt
-                new_direction = DIR_LEFT
+                if not new_moving:
+                    new_direction = DIR_LEFT
                 new_moving = True
-            if nui.glfw.KEY_D in keys or nui.glfw.KEY_RIGHT in keys:
+            elif nui.glfw.KEY_D in keys or nui.glfw.KEY_RIGHT in keys:
                 dx += MOVE_SPEED * dt
-                new_direction = DIR_RIGHT
+                if not new_moving:
+                    new_direction = DIR_RIGHT
                 new_moving = True
 
             # Reconfigure animation only when direction or movement state changes.
@@ -153,8 +164,8 @@ def main() -> None:
                 )
 
             if is_moving:
-                px = max(-1.0, min(1.0, px + dx))
-                py = max(-1.0, min(1.0, py + dy))
+                px = max(WORLD_MIN_X, min(WORLD_MAX_X, px + dx))
+                py = max(WORLD_MIN_Y, min(WORLD_MAX_Y, py + dy))
                 world.set_local_position(player_index, px, py)
                 world.update(dt)
 
