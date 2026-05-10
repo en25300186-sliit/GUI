@@ -506,9 +506,6 @@ class ModernGLRenderer:
 class InstancedModernGLRenderer(ModernGLRenderer):
     """ModernGL renderer that uses instanced quads for better batching efficiency."""
 
-    _INSTANCE_DATA_FLOATS = 4
-    _INSTANCE_COLOR_FLOATS = 3
-
     def __init__(self, *args, random_object_colors: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.random_object_colors = random_object_colors

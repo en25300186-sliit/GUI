@@ -8,4 +8,4 @@ Neural UI core with:
 - optional `InstancedModernGLRenderer` for batched instanced quad rendering with optional per-object colors
 
 Run the example:
-- `python /home/runner/work/GUI/GUI/example.py`
+- `python example.py`
