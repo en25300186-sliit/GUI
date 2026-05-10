@@ -528,7 +528,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._instance_color_vbo = None
 
     @staticmethod
-    def _index_color(index: int) -> Tuple[float, float, float]:
+    def _generate_color_from_index(index: int) -> Tuple[float, float, float]:
         """Generate a deterministic bright color from an object index."""
         # Linear Congruential Generator constants keep color generation deterministic
         # without storing separate per-object color arrays.
@@ -557,7 +557,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             if obj.tensor_index == self.world._last_hover_index:
                 color = self.hover_color
             elif self.random_object_colors:
-                color = self._index_color(obj.tensor_index)
+                color = self._generate_color_from_index(obj.tensor_index)
             else:
                 color = self.object_color
             instance_colors.extend(color)
@@ -579,6 +579,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._vao.render(moderngl.TRIANGLE_STRIP, instances=active_count)
 
     def create_window(self):
+        """Create a GLFW window and configure an instanced quad-rendering pipeline."""
         if not glfw.init():
             raise RuntimeError("Failed to initialize GLFW")
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)

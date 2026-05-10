@@ -4,10 +4,15 @@ import time
 
 import neural_ui as nui
 
+# Horizontal ship movement amplitude (world units).
 SHIP_X_AMPLITUDE = 0.6
+# Vertical ship movement amplitude (world units).
 SHIP_Y_AMPLITUDE = 0.3
+# Vertical oscillation frequency multiplier.
 SHIP_Y_FREQUENCY = 0.8
+# Animation time increment per logic tick.
 TIME_STEP = 0.02
+# Delay between logic ticks (seconds).
 SLEEP_SECONDS = 0.01
 
 
