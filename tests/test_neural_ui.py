@@ -124,6 +124,27 @@ class NeuralWorldTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             world.global_row(second)
 
+    def test_set_local_position_updates_row_and_marks_global_dirty(self):
+        world = NeuralWorld(use_cupy=False)
+        index = world.register(Object(x=0, y=0, width=1, height=1, on_hover=lambda _: None))
+        world._global_dirty = False
+
+        world.set_local_position(index, 1.25, -2.5)
+        self.assertTrue(world._global_dirty)
+        row = world.global_row(index)
+
+        self.assertAlmostEqual(row[NeuralWorld._ROW_X], 1.25)
+        self.assertAlmostEqual(row[NeuralWorld._ROW_Y], -2.5)
+
+    def test_set_local_position_raises_on_invalid_index(self):
+        world = NeuralWorld(use_cupy=False)
+        world.register(Object(x=0, y=0, width=1, height=1, on_hover=lambda _: None))
+
+        with self.assertRaises(IndexError):
+            world.set_local_position(-1, 0.0, 0.0)
+        with self.assertRaises(IndexError):
+            world.set_local_position(99, 0.0, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
