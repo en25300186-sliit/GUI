@@ -5,3 +5,7 @@ Neural UI core with:
 - iterative GPU/array-side parent-child global transform propagation (no recursive hierarchy walk)
 - event dispatch (hover/click) and top-most hit detection
 - optional `ModernGLRenderer` (glfw + moderngl shader pipeline) for GPU rendering
+- optional `InstancedModernGLRenderer` for batched instanced quad rendering with optional per-object colors
+
+Run the example:
+- `python /home/runner/work/GUI/GUI/example.py`

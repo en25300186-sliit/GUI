@@ -503,6 +503,120 @@ class ModernGLRenderer:
             glfw.terminate()
 
 
+class InstancedModernGLRenderer(ModernGLRenderer):
+    """ModernGL renderer that uses instanced quads for better batching efficiency."""
+
+    _INSTANCE_DATA_FLOATS = 4
+    _INSTANCE_COLOR_FLOATS = 3
+
+    def __init__(self, *args, random_object_colors: bool = False, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.random_object_colors = random_object_colors
+        self._quad_vbo = None
+        self._instance_data_vbo = None
+        self._instance_color_vbo = None
+
+    @staticmethod
+    def _index_color(index: int) -> Tuple[float, float, float]:
+        seed = (index * 1664525 + 1013904223) & 0xFFFFFFFF
+        r = 0.35 + (((seed >> 0) & 0xFF) / 255.0) * 0.65
+        g = 0.35 + (((seed >> 8) & 0xFF) / 255.0) * 0.65
+        b = 0.35 + (((seed >> 16) & 0xFF) / 255.0) * 0.65
+        return r, g, b
+
+    def _build_instances(self) -> Tuple[bytes, bytes, int]:
+        instance_data = array("f")
+        instance_colors = array("f")
+        active_count = 0
+        active_state = float(ObjectState.ACTIVE)
+        for obj, row in self.world.iter_render_rows():
+            if row[NeuralWorld._ROW_STATE] != active_state:
+                continue
+            instance_data.extend(
+                (
+                    row[NeuralWorld._ROW_X],
+                    row[NeuralWorld._ROW_Y],
+                    row[NeuralWorld._ROW_HALF_W],
+                    row[NeuralWorld._ROW_HALF_H],
+                )
+            )
+            if obj.tensor_index == self.world._last_hover_index:
+                color = self.hover_color
+            elif self.random_object_colors and obj.tensor_index is not None:
+                color = self._index_color(obj.tensor_index)
+            else:
+                color = self.object_color
+            instance_colors.extend(color)
+            active_count += 1
+        return instance_data.tobytes(), instance_colors.tobytes(), active_count
+
+    def _draw_world(self) -> None:
+        self._ctx.clear(*self.background_color, 1.0)
+        data_payload, color_payload, active_count = self._build_instances()
+        if active_count == 0:
+            return
+        self._program["aspect"].value = self.width / self.height
+        if len(data_payload) > self._instance_data_vbo.size:
+            self._instance_data_vbo.orphan(len(data_payload))
+        if len(color_payload) > self._instance_color_vbo.size:
+            self._instance_color_vbo.orphan(len(color_payload))
+        self._instance_data_vbo.write(data_payload)
+        self._instance_color_vbo.write(color_payload)
+        self._vao.render(moderngl.TRIANGLE_STRIP, instances=active_count)
+
+    def create_window(self):
+        if not glfw.init():
+            raise RuntimeError("Failed to initialize GLFW")
+        glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
+        glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
+        glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+        self.window = glfw.create_window(self.width, self.height, self.title, None, None)
+        if self.window is None:
+            glfw.terminate()
+            raise RuntimeError("Failed to create GLFW window")
+        glfw.make_context_current(self.window)
+        glfw.swap_interval(1 if self.vsync else 0)
+
+        self._ctx = moderngl.create_context()
+        self._program = self._ctx.program(
+            vertex_shader="""
+                #version 330
+                uniform float aspect;
+                in vec2 in_vert;
+                in vec4 in_data;
+                in vec3 in_color;
+                out vec3 v_color;
+                void main() {
+                    vec2 pos = in_data.xy + (in_vert * in_data.zw);
+                    pos.x /= aspect;
+                    gl_Position = vec4(pos, 0.0, 1.0);
+                    v_color = in_color;
+                }
+            """,
+            fragment_shader="""
+                #version 330
+                in vec3 v_color;
+                out vec4 fragColor;
+                void main() {
+                    fragColor = vec4(v_color, 1.0);
+                }
+            """,
+        )
+        quad = array("f", (-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0))
+        self._quad_vbo = self._ctx.buffer(quad.tobytes())
+        self._instance_data_vbo = self._ctx.buffer(reserve=16 * 1024)
+        self._instance_color_vbo = self._ctx.buffer(reserve=12 * 1024)
+        self._vao = self._ctx.vertex_array(
+            self._program,
+            [
+                (self._quad_vbo, "2f", "in_vert"),
+                (self._instance_data_vbo, "4f /i", "in_data"),
+                (self._instance_color_vbo, "3f /i", "in_color"),
+            ],
+        )
+        return self.window
+
+
 class Win32Renderer(ModernGLRenderer):
     def __init__(self, *args, **kwargs) -> None:
         raise RuntimeError(
