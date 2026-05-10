@@ -207,6 +207,15 @@ class NeuralWorldTests(unittest.TestCase):
         row = world.global_row(idx)
         self.assertEqual(int(row[NeuralWorld._ROW_STATE]), int(ObjectState.ACTIVE))
 
+    def test_update_keeps_outofscreen_when_still_outside_reactivation_bounds(self):
+        world = NeuralWorld(use_cupy=False)
+        idx = world.register(Object(x=0.0, y=0.0, width=1, height=1, state=ObjectState.OUTOFSCREEN, on_hover=lambda _: None))
+        world.set_local_position(idx, 1.2, 1.2)
+
+        world.update(0.016)
+        row = world.global_row(idx)
+        self.assertEqual(int(row[NeuralWorld._ROW_STATE]), int(ObjectState.OUTOFSCREEN))
+
     def test_set_color_updates_persistent_color_tensor(self):
         world = NeuralWorld(use_cupy=False)
         idx = world.register(Object(x=0.0, y=0.0, width=1, height=1, on_hover=lambda _: None))

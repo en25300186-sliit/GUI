@@ -282,6 +282,13 @@ class NeuralWorld:
     def _initial_color_for_index(self, index: int) -> Tuple[float, float, float]:
         return self._default_color or self._generate_color_from_index(index)
 
+    def _apply_position_friction(self, velocity: Any) -> None:
+        if self.backend == "python":
+            for axis in self._MOTION_POSITION_AXES:
+                velocity[axis] *= self.friction_coefficient
+            return
+        velocity[:, self._MOTION_POSITION_SLICE] *= self.friction_coefficient
+
     def update(self, dt: float) -> None:
         # Ignore negligible timesteps to avoid needless tensor work for near-zero frame deltas.
         if abs(float(dt)) < 1e-9:
@@ -294,8 +301,7 @@ class NeuralWorld:
                 vel = self.velocity_tensor[idx]
                 row[self._ROW_X] += vel[self._ROW_X] * dt
                 row[self._ROW_Y] += vel[self._ROW_Y] * dt
-                for axis in self._MOTION_POSITION_AXES:
-                    vel[axis] *= self.friction_coefficient
+                self._apply_position_friction(vel)
                 tracked = row[self._ROW_STATE] in (active_state, out_of_screen_state)
                 outside_screen = (
                     abs(row[self._ROW_X]) > self._SCREEN_BOUNDARY or abs(row[self._ROW_Y]) > self._SCREEN_BOUNDARY
@@ -316,7 +322,7 @@ class NeuralWorld:
         rows = self.world_tensor[: self._size]
         velocity = self.velocity_tensor[: self._size]
         rows[:, self._MOTION_POSITION_SLICE] += velocity[:, self._MOTION_POSITION_SLICE] * float(dt)
-        velocity[:, self._MOTION_POSITION_SLICE] *= self.friction_coefficient
+        self._apply_position_friction(velocity)
         self._global_dirty = True
         self._sync_global_transforms()
 
@@ -833,9 +839,9 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     float sdf = roundedBoxSdf(v_local_pos, v_half_size, cornerRadius);
 
                     // Prevent degenerate inner geometry when thick borders collapse the fill area.
-                    vec2 innerHalfSize = max(v_half_size - vec2(borderThickness), vec2(MIN_INNER_SIZE));
-                    float innerRadius = clamp(cornerRadius - borderThickness, 0.0, min(innerHalfSize.x, innerHalfSize.y));
-                    float innerSdf = roundedBoxSdf(v_local_pos, innerHalfSize, innerRadius);
+                    vec2 innerRectHalfSize = max(v_half_size - vec2(borderThickness), vec2(MIN_INNER_SIZE));
+                    float innerRadius = clamp(cornerRadius - borderThickness, 0.0, min(innerRectHalfSize.x, innerRectHalfSize.y));
+                    float innerSdf = roundedBoxSdf(v_local_pos, innerRectHalfSize, innerRadius);
 
                     float fillAlpha = 1.0 - smoothstep(0.0, softness, sdf);
                     float innerAlpha = 1.0 - smoothstep(0.0, softness, innerSdf);
@@ -847,11 +853,11 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     vec3 color = v_color * (innerAlpha + borderAlpha * BORDER_BRIGHTNESS)
                         + v_color * glow * GLOW_CONTRIBUTION
                         - vec3(shadow * SHADOW_CONTRIBUTION);
-                    float alpha = max(fillAlpha, glow * GLOW_ALPHA_CONTRIBUTION);
-                    if (alpha < ALPHA_DISCARD_THRESHOLD) {
+                    float finalAlpha = max(fillAlpha, glow * GLOW_ALPHA_CONTRIBUTION);
+                    if (finalAlpha < ALPHA_DISCARD_THRESHOLD) {
                         discard;
                     }
-                    fragColor = vec4(color, clamp(alpha, 0.0, 1.0));
+                    fragColor = vec4(color, clamp(finalAlpha, 0.0, 1.0));
                 }
                 """
             ).substitute(
