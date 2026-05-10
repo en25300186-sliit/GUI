@@ -504,4 +504,8 @@ class ModernGLRenderer:
 
 
 class Win32Renderer(ModernGLRenderer):
-    pass
+    def __init__(self, *args, **kwargs) -> None:
+        raise RuntimeError(
+            "Win32Renderer has been replaced by ModernGLRenderer. "
+            "Instantiate ModernGLRenderer directly to use shader-based rendering."
+        )

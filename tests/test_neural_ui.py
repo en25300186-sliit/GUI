@@ -100,8 +100,9 @@ class NeuralWorldTests(unittest.TestCase):
         deep_hierarchy_depth = 2000
         world = NeuralWorld(use_cupy=False)
         parent_index = -1
+        on_hover = lambda _: None
         for _ in range(deep_hierarchy_depth):
-            parent_index = world.register(Object(x=1, y=1, width=1, height=1, z=1, on_hover=lambda _: None), parent_index)
+            parent_index = world.register(Object(x=1, y=1, width=1, height=1, z=1, on_hover=on_hover), parent_index)
 
         row = world.global_row(parent_index)
         self.assertAlmostEqual(row[0], float(deep_hierarchy_depth))
