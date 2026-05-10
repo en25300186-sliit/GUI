@@ -50,10 +50,11 @@ class Object:
         super().__setattr__(name, value)
         if name not in {"x", "y"}:
             return
-        world = self.__dict__.get("_world")
-        if world is None or self.__dict__.get("_suspend_world_sync", False):
+        object_dict = self.__dict__
+        world = object_dict.get("_world")
+        if world is None or object_dict.get("_suspend_world_sync", False):
             return
-        tensor_index = self.__dict__.get("tensor_index")
+        tensor_index = object_dict.get("tensor_index")
         if tensor_index is None:
             return
         world.set_local_position(tensor_index, float(self.x), float(self.y))
@@ -287,8 +288,8 @@ class NeuralWorld:
                 vel = self.velocity_tensor[idx]
                 row[self._ROW_X] += vel[self._ROW_X] * dt
                 row[self._ROW_Y] += vel[self._ROW_Y] * dt
-                vel[self._ROW_X] *= self.friction_coefficient
-                vel[self._ROW_Y] *= self.friction_coefficient
+                for axis in (self._ROW_X, self._ROW_Y):
+                    vel[axis] *= self.friction_coefficient
                 tracked = row[self._ROW_STATE] in (active_state, out_of_screen_state)
                 outside_screen = (
                     abs(row[self._ROW_X]) > self._SCREEN_BOUNDARY or abs(row[self._ROW_Y]) > self._SCREEN_BOUNDARY
@@ -300,8 +301,6 @@ class NeuralWorld:
                 if tracked and outside_screen:
                     row[self._ROW_STATE] = out_of_screen_state
                 elif row[self._ROW_STATE] == out_of_screen_state and reentered:
-                    row[self._ROW_STATE] = active_state
-                elif row[self._ROW_STATE] == active_state:
                     row[self._ROW_STATE] = active_state
             self._global_dirty = True
             return
@@ -334,7 +333,6 @@ class NeuralWorld:
         tracked_states = (states == float(ObjectState.ACTIVE)) | (states == float(ObjectState.OUTOFSCREEN))
         states[tracked_states & outside] = float(ObjectState.OUTOFSCREEN)
         states[(states == float(ObjectState.OUTOFSCREEN)) & inside_reactivate] = float(ObjectState.ACTIVE)
-        states[(states == float(ObjectState.ACTIVE)) & ~outside] = float(ObjectState.ACTIVE)
         rows[:, self._ROW_STATE] = states
         global_rows[:, self._ROW_STATE] = states
 
