@@ -6,12 +6,12 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 try:  # pragma: no cover - exercised when CuPy is installed
     import cupy as cp
-except Exception:  # pragma: no cover - fallback for environments without CuPy
+except ImportError:  # pragma: no cover - fallback for environments without CuPy
     cp = None
 
 try:
     import numpy as np
-except Exception:  # pragma: no cover - fallback for environments without NumPy
+except ImportError:  # pragma: no cover - fallback for environments without NumPy
     np = None
 
 
@@ -112,7 +112,15 @@ class NeuralWorld:
         y_ndc = 1.0 - (mouse_y_px / height_px) * 2.0
         return x_ndc, y_ndc
 
-    def _to_scalar(self, value):
+    @staticmethod
+    def _has_handler(obj: Object, event: str) -> bool:
+        if event == "hover":
+            return obj.on_hover is not None
+        if event == "click":
+            return obj.on_click is not None
+        return False
+
+    def _to_scalar(self, value: object) -> object:
         if self.backend in {"python", "numpy"}:
             return value
         return cp.asnumpy(value)
@@ -126,7 +134,7 @@ class NeuralWorld:
         if self.backend == "python":
             mask = []
             for row, obj in zip(self.world_tensor, self._objects):
-                callback_ok = (event == "hover" and obj.on_hover is not None) or (event == "click" and obj.on_click is not None)
+                callback_ok = self._has_handler(obj, event)
                 is_hit = (
                     row[self._ROW_STATE] == float(ObjectState.ACTIVE)
                     and abs(row[self._ROW_X] - x_world) <= row[self._ROW_HALF_W]
@@ -142,9 +150,7 @@ class NeuralWorld:
         within_y = self.xp.abs(rows[:, self._ROW_Y] - y_world) <= rows[:, self._ROW_HALF_H]
         callback_mask = self.xp.ones(rows.shape[0], dtype=bool)
         for index, obj in self._index_to_object.items():
-            if event == "hover" and obj.on_hover is None:
-                callback_mask[index] = False
-            elif event == "click" and obj.on_click is None:
+            if not self._has_handler(obj, event):
                 callback_mask[index] = False
 
         return active_mask & within_x & within_y & callback_mask
