@@ -859,7 +859,15 @@ class ModernGLRenderer:
         bottom_ndc = y_world - half_h_world
         return left_ndc, top_ndc, right_ndc, bottom_ndc
 
-    def _build_vertices(self) -> bytes:
+    def _framebuffer_size(self) -> Tuple[int, int]:
+        if self.window is None:
+            return self.width, self.height
+        framebuffer_w, framebuffer_h = glfw.get_framebuffer_size(self.window)
+        if framebuffer_w <= 0 or framebuffer_h <= 0:
+            return self.width, self.height
+        return int(framebuffer_w), int(framebuffer_h)
+
+    def _build_vertices(self, viewport_width: int, viewport_height: int) -> bytes:
         vertices = array("f")
         for obj, row in self.world.iter_render_rows():
             if row[NeuralWorld._ROW_STATE] != float(ObjectState.ACTIVE):
@@ -868,8 +876,8 @@ class ModernGLRenderer:
             left, top, right, bottom = self.world_to_ndc(
                 row[NeuralWorld._ROW_X],
                 row[NeuralWorld._ROW_Y],
-                self.width,
-                self.height,
+                viewport_width,
+                viewport_height,
                 row[NeuralWorld._ROW_HALF_W],
                 row[NeuralWorld._ROW_HALF_H],
             )
@@ -883,14 +891,10 @@ class ModernGLRenderer:
         return vertices.tobytes()
 
     def _draw_world(self) -> None:
-        if self.window is not None:
-            framebuffer_w, framebuffer_h = glfw.get_framebuffer_size(self.window)
-            if framebuffer_w > 0 and framebuffer_h > 0:
-                self._ctx.viewport = (0, 0, framebuffer_w, framebuffer_h)
-                self.width = framebuffer_w
-                self.height = framebuffer_h
+        viewport_width, viewport_height = self._framebuffer_size()
+        self._ctx.viewport = (0, 0, viewport_width, viewport_height)
         self._ctx.clear(*self.background_color, 1.0)
-        payload = self._build_vertices()
+        payload = self._build_vertices(viewport_width, viewport_height)
         if not payload:
             return
         if len(payload) > self._vbo.size:
@@ -1007,12 +1011,8 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         return tensor
 
     def _draw_world(self) -> None:
-        if self.window is not None:
-            framebuffer_w, framebuffer_h = glfw.get_framebuffer_size(self.window)
-            if framebuffer_w > 0 and framebuffer_h > 0:
-                self._ctx.viewport = (0, 0, framebuffer_w, framebuffer_h)
-                self.width = framebuffer_w
-                self.height = framebuffer_h
+        viewport_width, viewport_height = self._framebuffer_size()
+        self._ctx.viewport = (0, 0, viewport_width, viewport_height)
         self._ctx.clear(*self.background_color, 1.0)
         if self.world.backend == "python":
             super()._draw_world()
@@ -1028,7 +1028,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         color_payload = self._as_cpu_tensor(color_tensor).tobytes()
         if not data_payload:
             return
-        self._program["aspect"].value = self.width / self.height
+        self._program["aspect"].value = viewport_width / viewport_height
         self._program["active_state"].value = float(ObjectState.ACTIVE)
         hover_index = self.world.hover_index()
         self._program["hover_index"].value = -1 if hover_index is None else int(hover_index)
@@ -1123,7 +1123,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
 
                 void main() {
                     if (v_costume_id >= 0.0 && texture_layer_count > 0.0) {
-                        float texture_layer = clamp(floor(v_costume_id + 0.5), 0.0, texture_layer_count - 1.0);
+                        float texture_layer = clamp(round(v_costume_id), 0.0, texture_layer_count - 1.0);
                         // Map local quad coordinates from [-half_size, +half_size] into [0, 1] UV space.
                         vec2 uv = (v_local_pos / (v_half_size * 2.0)) + vec2(0.5);
                         // Flip Y because image files are top-down while OpenGL texture origin is bottom-up.
