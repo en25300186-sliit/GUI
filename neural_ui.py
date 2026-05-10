@@ -1202,11 +1202,11 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         if self._texture_manager is None:
             return
         for obj in self.world._objects:
-            if obj.tensor_index is None:
-                continue
             has_spritesheet = obj.spritesheet is not None and obj.grid is not None
             has_costumes = bool(obj.costumes)
             if not has_spritesheet and not has_costumes:
+                continue
+            if obj.tensor_index is None:
                 continue
             object_key = id(obj)
             if self._sprite_configured.get(object_key):
