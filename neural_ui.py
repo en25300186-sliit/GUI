@@ -19,7 +19,6 @@ class ObjectState(IntEnum):
     ACTIVE = 1
     HIDDEN = 0
     OUTOFSCREEN = -1
-    OUTOFSCREAN = -1
 
 
 @dataclass
@@ -114,7 +113,7 @@ class NeuralWorld:
         return x_ndc, y_ndc
 
     def _to_scalar(self, value):
-        if self.backend == "python" or self.xp is np:
+        if self.backend in {"python", "numpy"}:
             return value
         return cp.asnumpy(value)
 
