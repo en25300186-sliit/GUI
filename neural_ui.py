@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from array import array
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
+from string import Template
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:  # pragma: no cover - exercised when CuPy is installed
@@ -43,6 +44,33 @@ class Object:
     on_hover: Optional[Callable[["Object"], None]] = None
     on_click: Optional[Callable[["Object"], None]] = None
     tensor_index: Optional[int] = None
+    _world: Optional["NeuralWorld"] = field(default=None, init=False, repr=False, compare=False)
+    _suspend_world_sync: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name not in {"x", "y"}:
+            return
+        object_dict = self.__dict__
+        world = object_dict.get("_world")
+        if world is None or object_dict.get("_suspend_world_sync", False):
+            return
+        tensor_index = object_dict.get("tensor_index")
+        if tensor_index is None:
+            return
+        world.set_local_position(tensor_index, float(self.x), float(self.y))
+
+    def _bind_view(self, world: "NeuralWorld", index: int) -> None:
+        self._world = world
+        self._suspend_world_sync = True
+        self.tensor_index = index
+        self._suspend_world_sync = False
+
+    def _sync_position_from_world(self, x: float, y: float) -> None:
+        self._suspend_world_sync = True
+        self.x = float(x)
+        self.y = float(y)
+        self._suspend_world_sync = False
 
 
 class ObjectGroup(Object):
@@ -67,10 +95,28 @@ class NeuralWorld:
     _ROW_HALF_H = 3
     _ROW_Z = 4
     _ROW_STATE = 5
+    _ROW_CORNER_RADIUS = 6
+    _ROW_BORDER_THICKNESS = 7
+    _ROW_SOFTNESS = 8
+    _ROW_RESERVED_SHADER_PARAM = 9  # Reserved for future per-instance shader attributes.
+    _WORLD_COLUMNS = 10
+    _MOTION_COLUMNS = 6
+    _MOTION_POSITION_AXES = (_ROW_X, _ROW_Y)
+    _MOTION_POSITION_SLICE = slice(_ROW_X, _ROW_Y + 1)
     _COLOR_CHANNELS = 3
+    _DEFAULT_CORNER_RADIUS_FACTOR = 0.1
+    _DEFAULT_BORDER_THICKNESS = 0.01
+    _DEFAULT_SOFTNESS = 0.02
     _SCREEN_BOUNDARY = 1.5
+    _REACTIVATE_BOUNDARY = 1.1
 
-    def __init__(self, use_cupy: bool = True, initial_capacity: int = 10_000, growth_chunk: int = 10_000) -> None:
+    def __init__(
+        self,
+        use_cupy: bool = True,
+        initial_capacity: int = 10_000,
+        growth_chunk: int = 10_000,
+        friction_coefficient: float = 0.98,
+    ) -> None:
         if initial_capacity <= 0:
             raise ValueError("initial_capacity must be positive")
         if growth_chunk <= 0:
@@ -79,21 +125,24 @@ class NeuralWorld:
         self._capacity = int(initial_capacity)
         self._size = 0
         self._global_dirty = False
+        self.friction_coefficient = float(friction_coefficient)
+        if self.friction_coefficient < 0.0:
+            raise ValueError("friction_coefficient must be non-negative")
         if use_cupy and cp is not None:
             self.xp = cp
             self.backend = "cupy"
-            self.world_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
-            self.velocity_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
+            self.world_tensor = self.xp.zeros((self._capacity, self._WORLD_COLUMNS), dtype=self.xp.float32)
+            self.velocity_tensor = self.xp.zeros((self._capacity, self._MOTION_COLUMNS), dtype=self.xp.float32)
             self.color_tensor = self.xp.zeros((self._capacity, self._COLOR_CHANNELS), dtype=self.xp.float32)
-            self._global_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
+            self._global_tensor = self.xp.zeros((self._capacity, self._WORLD_COLUMNS), dtype=self.xp.float32)
             self._parent_index = self.xp.full((self._capacity,), -1, dtype=self.xp.int32)
         elif np is not None:
             self.xp = np
             self.backend = "numpy"
-            self.world_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
-            self.velocity_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
+            self.world_tensor = self.xp.zeros((self._capacity, self._WORLD_COLUMNS), dtype=self.xp.float32)
+            self.velocity_tensor = self.xp.zeros((self._capacity, self._MOTION_COLUMNS), dtype=self.xp.float32)
             self.color_tensor = self.xp.zeros((self._capacity, self._COLOR_CHANNELS), dtype=self.xp.float32)
-            self._global_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
+            self._global_tensor = self.xp.zeros((self._capacity, self._WORLD_COLUMNS), dtype=self.xp.float32)
             self._parent_index = self.xp.full((self._capacity,), -1, dtype=self.xp.int32)
         else:
             self.xp = None
@@ -106,6 +155,7 @@ class NeuralWorld:
         self._objects: List[Object] = []
         self._index_to_object: Dict[int, Object] = {}
         self._last_hover_index: Optional[int] = None
+        self._default_color: Optional[Tuple[float, float, float]] = None
 
     @property
     def size(self) -> int:
@@ -132,17 +182,19 @@ class NeuralWorld:
         while new_capacity < minimum_capacity:
             new_capacity += self._growth_chunk
         expand_by = new_capacity - self._capacity
-        zeros = self.xp.zeros((expand_by, 6), dtype=self.xp.float32)
-        self.world_tensor = self.xp.concatenate((self.world_tensor, zeros), axis=0)
-        self.velocity_tensor = self.xp.concatenate((self.velocity_tensor, zeros), axis=0)
+        world_zeros = self.xp.zeros((expand_by, self._WORLD_COLUMNS), dtype=self.xp.float32)
+        velocity_zeros = self.xp.zeros((expand_by, self._MOTION_COLUMNS), dtype=self.xp.float32)
+        self.world_tensor = self.xp.concatenate((self.world_tensor, world_zeros), axis=0)
+        self.velocity_tensor = self.xp.concatenate((self.velocity_tensor, velocity_zeros), axis=0)
         color_zeros = self.xp.zeros((expand_by, self._COLOR_CHANNELS), dtype=self.xp.float32)
         self.color_tensor = self.xp.concatenate((self.color_tensor, color_zeros), axis=0)
-        self._global_tensor = self.xp.concatenate((self._global_tensor, zeros), axis=0)
+        self._global_tensor = self.xp.concatenate((self._global_tensor, world_zeros), axis=0)
         parent_padding = self.xp.full((expand_by,), -1, dtype=self.xp.int32)
         self._parent_index = self.xp.concatenate((self._parent_index, parent_padding), axis=0)
         self._capacity = new_capacity
 
     def _register_single(self, obj: Object, parent_index: int = -1) -> int:
+        corner_radius = min(obj.width / 2.0, obj.height / 2.0) * self._DEFAULT_CORNER_RADIUS_FACTOR
         row = [
             obj.x,
             obj.y,
@@ -150,25 +202,31 @@ class NeuralWorld:
             obj.height / 2.0,
             obj.z,
             float(obj.state),
+            corner_radius,
+            self._DEFAULT_BORDER_THICKNESS,
+            self._DEFAULT_SOFTNESS,
+            0.0,
         ]
         if self.backend == "python":
             self.world_tensor.append(row)
-            self.velocity_tensor.append([0.0] * 6)
-            self.color_tensor.append(list(self._generate_color_from_index(len(self.world_tensor) - 1)))
+            self.velocity_tensor.append([0.0] * self._MOTION_COLUMNS)
             self._python_parent_index.append(parent_index)
             self._python_global_rows.append(row[:])
             index = len(self.world_tensor) - 1
+            initial_color = self._initial_color_for_index(index)
+            self.color_tensor.append(list(initial_color))
         else:
             index = self._size
             self._ensure_capacity(index + 1)
             row_tensor = self.xp.asarray(row, dtype=self.xp.float32)
             self.world_tensor[index, :] = row_tensor
             self.velocity_tensor[index, :] = 0.0
-            self.color_tensor[index, :] = self.xp.asarray(self._generate_color_from_index(index), dtype=self.xp.float32)
+            initial_color = self._initial_color_for_index(index)
+            self.color_tensor[index, :] = self.xp.asarray(initial_color, dtype=self.xp.float32)
             self._parent_index[index] = int(parent_index)
             self._global_tensor[index, :] = row_tensor
             self._size += 1
-        obj.tensor_index = index
+        obj._bind_view(self, index)
         self._objects.append(obj)
         self._index_to_object[index] = obj
         self._global_dirty = True
@@ -183,7 +241,34 @@ class NeuralWorld:
         else:
             self.world_tensor[index, self._ROW_X] = float(x)
             self.world_tensor[index, self._ROW_Y] = float(y)
+        obj = self._index_to_object.get(index)
+        if obj is not None:
+            obj._sync_position_from_world(x, y)
         self._global_dirty = True
+
+    def set_color(self, index: int, color: Sequence[float]) -> None:
+        if index < 0 or index >= self.size:
+            raise IndexError("Object index out of bounds")
+        if len(color) != self._COLOR_CHANNELS:
+            raise ValueError("color must contain exactly three channels")
+        r, g, b = (float(channel) for channel in color)
+        if self.backend == "python":
+            self.color_tensor[index] = [r, g, b]
+        else:
+            self.color_tensor[index, :] = self.xp.asarray([r, g, b], dtype=self.xp.float32)
+
+    def set_default_color(self, color: Sequence[float]) -> None:
+        if len(color) != self._COLOR_CHANNELS:
+            raise ValueError("color must contain exactly three channels")
+        r, g, b = (float(channel) for channel in color)
+        self._default_color = (r, g, b)
+        if self.size == 0:
+            return
+        if self.backend == "python":
+            for index in range(self.size):
+                self.color_tensor[index] = [r, g, b]
+            return
+        self.color_tensor[: self.size, :] = self.xp.asarray([r, g, b], dtype=self.xp.float32)
 
     @staticmethod
     def _generate_color_from_index(index: int) -> Tuple[float, float, float]:
@@ -193,6 +278,16 @@ class NeuralWorld:
         g = 0.35 + (((seed >> 8) & 0xFF) / 255.0) * 0.65
         b = 0.35 + (((seed >> 16) & 0xFF) / 255.0) * 0.65
         return r, g, b
+
+    def _initial_color_for_index(self, index: int) -> Tuple[float, float, float]:
+        return self._default_color or self._generate_color_from_index(index)
+
+    def _apply_position_friction(self, velocity: Any) -> None:
+        if self.backend == "python":
+            for axis in self._MOTION_POSITION_AXES:
+                velocity[axis] *= self.friction_coefficient
+            return
+        velocity[:, self._MOTION_POSITION_SLICE] *= self.friction_coefficient
 
     def update(self, dt: float) -> None:
         # Ignore negligible timesteps to avoid needless tensor work for near-zero frame deltas.
@@ -206,12 +301,18 @@ class NeuralWorld:
                 vel = self.velocity_tensor[idx]
                 row[self._ROW_X] += vel[self._ROW_X] * dt
                 row[self._ROW_Y] += vel[self._ROW_Y] * dt
+                self._apply_position_friction(vel)
                 tracked = row[self._ROW_STATE] in (active_state, out_of_screen_state)
-                if tracked and (
-                    row[self._ROW_X] < -self._SCREEN_BOUNDARY or row[self._ROW_X] > self._SCREEN_BOUNDARY
-                ):
+                outside_screen = (
+                    abs(row[self._ROW_X]) > self._SCREEN_BOUNDARY or abs(row[self._ROW_Y]) > self._SCREEN_BOUNDARY
+                )
+                reentered = (
+                    abs(row[self._ROW_X]) <= self._REACTIVATE_BOUNDARY
+                    and abs(row[self._ROW_Y]) <= self._REACTIVATE_BOUNDARY
+                )
+                if tracked and outside_screen:
                     row[self._ROW_STATE] = out_of_screen_state
-                elif tracked:
+                elif row[self._ROW_STATE] == out_of_screen_state and reentered:
                     row[self._ROW_STATE] = active_state
             self._global_dirty = True
             return
@@ -220,17 +321,22 @@ class NeuralWorld:
             return
         rows = self.world_tensor[: self._size]
         velocity = self.velocity_tensor[: self._size]
-        rows[:, :2] += velocity[:, :2] * float(dt)
+        rows[:, self._MOTION_POSITION_SLICE] += velocity[:, self._MOTION_POSITION_SLICE] * float(dt)
+        self._apply_position_friction(velocity)
         self._global_dirty = True
         self._sync_global_transforms()
 
         global_rows = self._global_tensor[: self._size]
         states = rows[:, self._ROW_STATE]
         x_positions = global_rows[:, self._ROW_X]
-        outside = (x_positions < -self._SCREEN_BOUNDARY) | (x_positions > self._SCREEN_BOUNDARY)
+        y_positions = global_rows[:, self._ROW_Y]
+        abs_x_positions = self.xp.abs(x_positions)
+        abs_y_positions = self.xp.abs(y_positions)
+        outside = (abs_x_positions > self._SCREEN_BOUNDARY) | (abs_y_positions > self._SCREEN_BOUNDARY)
+        inside_reactivate = (abs_x_positions <= self._REACTIVATE_BOUNDARY) & (abs_y_positions <= self._REACTIVATE_BOUNDARY)
         tracked_states = (states == float(ObjectState.ACTIVE)) | (states == float(ObjectState.OUTOFSCREEN))
         states[tracked_states & outside] = float(ObjectState.OUTOFSCREEN)
-        states[tracked_states & ~outside] = float(ObjectState.ACTIVE)
+        states[(states == float(ObjectState.OUTOFSCREEN)) & inside_reactivate] = float(ObjectState.ACTIVE)
         rows[:, self._ROW_STATE] = states
         global_rows[:, self._ROW_STATE] = states
 
@@ -589,12 +695,28 @@ class InstancedModernGLRenderer(ModernGLRenderer):
 
     _INITIAL_INSTANCE_DATA_BUFFER_SIZE = 20 * 1024
     _INITIAL_INSTANCE_COLOR_BUFFER_SIZE = 12 * 1024
+    _SHADER_MIN_SOFTNESS = 0.0005
+    _SHADER_MIN_INNER_SIZE = 0.0005
+    _SHADER_GLOW_FALLOFF = 10.0
+    _SHADER_GLOW_INTENSITY = 0.35
+    _SHADER_SHADOW_OFFSET = 2.0
+    _SHADER_SHADOW_FALLOFF = 12.0
+    _SHADER_SHADOW_INTENSITY = 0.2
+    _SHADER_BORDER_BRIGHTNESS = 0.85
+    _SHADER_GLOW_CONTRIBUTION = 0.4
+    _SHADER_SHADOW_CONTRIBUTION = 0.2
+    _SHADER_GLOW_ALPHA_CONTRIBUTION = 0.75
+    _SHADER_ALPHA_DISCARD_THRESHOLD = 0.01
     _INSTANCE_DATA_COLUMNS = (
         NeuralWorld._ROW_X,
         NeuralWorld._ROW_Y,
         NeuralWorld._ROW_HALF_W,
         NeuralWorld._ROW_HALF_H,
         NeuralWorld._ROW_STATE,
+        NeuralWorld._ROW_CORNER_RADIUS,
+        NeuralWorld._ROW_BORDER_THICKNESS,
+        NeuralWorld._ROW_SOFTNESS,
+        NeuralWorld._ROW_RESERVED_SHADER_PARAM,
     )
 
     def __init__(self, *args, random_object_colors: bool = False, **kwargs) -> None:
@@ -604,6 +726,8 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._quad_vbo = None
         self._instance_data_vbo = None
         self._instance_color_vbo = None
+        if not self.random_object_colors:
+            self.world.set_default_color(self.object_color)
 
     def _as_cpu_tensor(self, tensor):
         """Convert CuPy tensors to NumPy arrays for byte upload; leave others unchanged."""
@@ -621,13 +745,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self.world.sync_global_transforms()
         rows = self.world._global_tensor[: self.world.size]
         instance_data_tensor = rows[:, self._INSTANCE_DATA_COLUMNS]
-        if self.random_object_colors:
-            color_tensor = self.world.color_tensor[: self.world.size]
-        else:
-            color_tensor = self.world.xp.empty((self.world.size, 3), dtype=self.world.xp.float32)
-            color_tensor[:, 0] = self.object_color[0]
-            color_tensor[:, 1] = self.object_color[1]
-            color_tensor[:, 2] = self.object_color[2]
+        color_tensor = self.world.color_tensor[: self.world.size]
         data_payload = self._as_cpu_tensor(instance_data_tensor).tobytes()
         color_payload = self._as_cpu_tensor(color_tensor).tobytes()
         if not data_payload:
@@ -670,8 +788,12 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 in vec2 in_vert;
                 in vec4 in_data;
                 in float in_state;
+                in vec4 in_params;
                 in vec3 in_color;
                 out vec3 v_color;
+                out vec2 v_local_pos;
+                out vec2 v_half_size;
+                out vec4 v_params;
                 void main() {
                     float visible = in_state == active_state ? 1.0 : 0.0;
                     vec2 scale = in_data.zw * visible;
@@ -679,16 +801,79 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     pos.x /= aspect;
                     gl_Position = vec4(pos, 0.0, 1.0);
                     v_color = gl_InstanceID == hover_index ? hover_color : in_color;
+                    v_local_pos = in_vert * in_data.zw;
+                    v_half_size = in_data.zw;
+                    v_params = in_params;
                 }
             """,
-            fragment_shader="""
+            fragment_shader=Template(
+                """
                 #version 330
+                const float MIN_SOFTNESS = $min_softness;
+                const float MIN_INNER_SIZE = $min_inner_size;
+                const float GLOW_FALLOFF = $glow_falloff;
+                const float GLOW_INTENSITY = $glow_intensity;
+                const float SHADOW_OFFSET = $shadow_offset;
+                const float SHADOW_FALLOFF = $shadow_falloff;
+                const float SHADOW_INTENSITY = $shadow_intensity;
+                const float BORDER_BRIGHTNESS = $border_brightness;
+                const float GLOW_CONTRIBUTION = $glow_contribution;
+                const float SHADOW_CONTRIBUTION = $shadow_contribution;
+                const float GLOW_ALPHA_CONTRIBUTION = $glow_alpha_contribution;
+                const float ALPHA_DISCARD_THRESHOLD = $alpha_discard_threshold;
                 in vec3 v_color;
+                in vec2 v_local_pos;
+                in vec2 v_half_size;
+                in vec4 v_params;
                 out vec4 fragColor;
-                void main() {
-                    fragColor = vec4(v_color, 1.0);
+
+                float roundedBoxSdf(vec2 point, vec2 halfSize, float radius) {
+                    vec2 q = abs(point) - (halfSize - vec2(radius));
+                    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
                 }
-            """,
+
+                void main() {
+                    float cornerRadius = clamp(v_params.x, 0.0, min(v_half_size.x, v_half_size.y));
+                    float borderThickness = max(v_params.y, 0.0);
+                    float softness = max(v_params.z, MIN_SOFTNESS);
+                    float sdf = roundedBoxSdf(v_local_pos, v_half_size, cornerRadius);
+
+                    // Prevent degenerate inner geometry when thick borders collapse the fill area.
+                    vec2 innerRectHalfSize = max(v_half_size - vec2(borderThickness), vec2(MIN_INNER_SIZE));
+                    float innerRadius = clamp(cornerRadius - borderThickness, 0.0, min(innerRectHalfSize.x, innerRectHalfSize.y));
+                    float innerSdf = roundedBoxSdf(v_local_pos, innerRectHalfSize, innerRadius);
+
+                    float fillAlpha = 1.0 - smoothstep(0.0, softness, sdf);
+                    float innerAlpha = 1.0 - smoothstep(0.0, softness, innerSdf);
+                    float borderAlpha = clamp(fillAlpha - innerAlpha, 0.0, 1.0);
+
+                    float glow = exp(-max(sdf, 0.0) / (softness * GLOW_FALLOFF)) * GLOW_INTENSITY;
+                    float shadow = exp(-max(sdf + softness * SHADOW_OFFSET, 0.0) / (softness * SHADOW_FALLOFF)) * SHADOW_INTENSITY;
+
+                    vec3 color = v_color * (innerAlpha + borderAlpha * BORDER_BRIGHTNESS)
+                        + v_color * glow * GLOW_CONTRIBUTION
+                        - vec3(shadow * SHADOW_CONTRIBUTION);
+                    float finalAlpha = max(fillAlpha, glow * GLOW_ALPHA_CONTRIBUTION);
+                    if (finalAlpha < ALPHA_DISCARD_THRESHOLD) {
+                        discard;
+                    }
+                    fragColor = vec4(color, clamp(finalAlpha, 0.0, 1.0));
+                }
+                """
+            ).substitute(
+                min_softness=self._SHADER_MIN_SOFTNESS,
+                min_inner_size=self._SHADER_MIN_INNER_SIZE,
+                glow_falloff=self._SHADER_GLOW_FALLOFF,
+                glow_intensity=self._SHADER_GLOW_INTENSITY,
+                shadow_offset=self._SHADER_SHADOW_OFFSET,
+                shadow_falloff=self._SHADER_SHADOW_FALLOFF,
+                shadow_intensity=self._SHADER_SHADOW_INTENSITY,
+                border_brightness=self._SHADER_BORDER_BRIGHTNESS,
+                glow_contribution=self._SHADER_GLOW_CONTRIBUTION,
+                shadow_contribution=self._SHADER_SHADOW_CONTRIBUTION,
+                glow_alpha_contribution=self._SHADER_GLOW_ALPHA_CONTRIBUTION,
+                alpha_discard_threshold=self._SHADER_ALPHA_DISCARD_THRESHOLD,
+            ),
         )
         quad = array("f", (-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0))
         self._quad_vbo = self._ctx.buffer(quad.tobytes())
@@ -698,11 +883,12 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             self._program,
             [
                 (self._quad_vbo, "2f", "in_vert"),
-                (self._instance_data_vbo, "4f 1f /i", "in_data", "in_state"),
+                (self._instance_data_vbo, "4f 1f 4f /i", "in_data", "in_state", "in_params"),
                 (self._instance_color_vbo, "3f /i", "in_color"),
             ],
         )
         return self.window
+
 
 
 class Win32Renderer(ModernGLRenderer):
