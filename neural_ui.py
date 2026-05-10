@@ -162,15 +162,30 @@ class NeuralWorld:
             return
 
         if self.backend == "python":
-            for idx, local_row in enumerate(self.world_tensor):
-                parent_idx = self._python_parent_index[idx]
+            state = [0] * len(self.world_tensor)
+
+            def _resolve(index: int) -> None:
+                if state[index] == 2:
+                    return
+                if state[index] == 1:
+                    raise ValueError("Hierarchy cycle detected")
+                state[index] = 1
+                local_row = self.world_tensor[index]
+                parent_idx = self._python_parent_index[index]
                 global_row = local_row[:]
                 if parent_idx >= 0:
+                    if parent_idx >= len(self.world_tensor):
+                        raise ValueError("Parent index is out of bounds")
+                    _resolve(parent_idx)
                     parent_global = self._python_global_rows[parent_idx]
                     global_row[self._ROW_X] = local_row[self._ROW_X] + parent_global[self._ROW_X]
                     global_row[self._ROW_Y] = local_row[self._ROW_Y] + parent_global[self._ROW_Y]
                     global_row[self._ROW_Z] = local_row[self._ROW_Z] + parent_global[self._ROW_Z]
-                self._python_global_rows[idx] = global_row
+                self._python_global_rows[index] = global_row
+                state[index] = 2
+
+            for idx in range(len(self.world_tensor)):
+                _resolve(idx)
             self._global_dirty = False
             return
 
@@ -180,12 +195,26 @@ class NeuralWorld:
         active_local = self.world_tensor[: self._size]
         active_global = self._global_tensor[: self._size]
         active_global[:, :] = active_local
-        for idx in range(self._size):
-            parent_idx = int(self._to_scalar(self._parent_index[idx]))
+        state = [0] * self._size
+
+        def _resolve(index: int) -> None:
+            if state[index] == 2:
+                return
+            if state[index] == 1:
+                raise ValueError("Hierarchy cycle detected")
+            state[index] = 1
+            parent_idx = int(self._to_scalar(self._parent_index[index]))
             if parent_idx >= 0:
-                active_global[idx, self._ROW_X] = active_local[idx, self._ROW_X] + active_global[parent_idx, self._ROW_X]
-                active_global[idx, self._ROW_Y] = active_local[idx, self._ROW_Y] + active_global[parent_idx, self._ROW_Y]
-                active_global[idx, self._ROW_Z] = active_local[idx, self._ROW_Z] + active_global[parent_idx, self._ROW_Z]
+                if parent_idx >= self._size:
+                    raise ValueError("Parent index is out of bounds")
+                _resolve(parent_idx)
+                active_global[index, self._ROW_X] = active_local[index, self._ROW_X] + active_global[parent_idx, self._ROW_X]
+                active_global[index, self._ROW_Y] = active_local[index, self._ROW_Y] + active_global[parent_idx, self._ROW_Y]
+                active_global[index, self._ROW_Z] = active_local[index, self._ROW_Z] + active_global[parent_idx, self._ROW_Z]
+            state[index] = 2
+
+        for idx in range(self._size):
+            _resolve(idx)
         self._global_dirty = False
 
     def global_row(self, index: int) -> Optional[Sequence[float]]:
@@ -334,18 +363,14 @@ class Win32Renderer:
         x_world: float, y_world: float, width_px: int, height_px: int, half_w_world: float, half_h_world: float
     ) -> Tuple[int, int, int, int]:
         aspect = width_px / height_px
-        x_ndc = x_world / aspect
         left_ndc = (x_world - half_w_world) / aspect
         right_ndc = (x_world + half_w_world) / aspect
         top_ndc = y_world + half_h_world
         bottom_ndc = y_world - half_h_world
-        center_x = int((x_ndc + 1.0) * 0.5 * width_px)
-        center_y = int((1.0 - (y_world + 1.0) * 0.5) * height_px)
         left = int((left_ndc + 1.0) * 0.5 * width_px)
         right = int((right_ndc + 1.0) * 0.5 * width_px)
         top = int((1.0 - (top_ndc + 1.0) * 0.5) * height_px)
         bottom = int((1.0 - (bottom_ndc + 1.0) * 0.5) * height_px)
-        _ = (center_x, center_y)  # keeps conversion intent explicit for future extensions
         return left, top, right, bottom
 
     def _draw_world(self, hdc: int) -> None:
