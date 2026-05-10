@@ -754,6 +754,10 @@ class TextureManager:
         self._ensure_uploaded()
         return self._texture_array
 
+    @property
+    def layer_count(self) -> int:
+        return len(self._layer_pixels)
+
     def bind(self, location: int = 0) -> None:
         texture = self.texture_array()
         if texture is not None:
@@ -788,7 +792,7 @@ class TextureManager:
         if self._texture_array is not None:
             self._texture_array.release()
             self._texture_array = None
-        stacked_pixels = np.stack(self._layer_pixels, axis=0)
+        stacked_pixels = np.ascontiguousarray(np.stack(self._layer_pixels, axis=0))
         self._texture_array = self._ctx.texture_array(
             (int(self._width), int(self._height), len(self._layer_pixels)),
             components=4,
@@ -879,6 +883,12 @@ class ModernGLRenderer:
         return vertices.tobytes()
 
     def _draw_world(self) -> None:
+        if self.window is not None:
+            framebuffer_w, framebuffer_h = glfw.get_framebuffer_size(self.window)
+            if framebuffer_w > 0 and framebuffer_h > 0:
+                self._ctx.viewport = (0, 0, framebuffer_w, framebuffer_h)
+                self.width = framebuffer_w
+                self.height = framebuffer_h
         self._ctx.clear(*self.background_color, 1.0)
         payload = self._build_vertices()
         if not payload:
@@ -997,6 +1007,12 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         return tensor
 
     def _draw_world(self) -> None:
+        if self.window is not None:
+            framebuffer_w, framebuffer_h = glfw.get_framebuffer_size(self.window)
+            if framebuffer_w > 0 and framebuffer_h > 0:
+                self._ctx.viewport = (0, 0, framebuffer_w, framebuffer_h)
+                self.width = framebuffer_w
+                self.height = framebuffer_h
         self._ctx.clear(*self.background_color, 1.0)
         if self.world.backend == "python":
             super()._draw_world()
@@ -1017,6 +1033,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         hover_index = self.world.hover_index()
         self._program["hover_index"].value = -1 if hover_index is None else int(hover_index)
         self._program["hover_color"].value = self.hover_color
+        self._program["texture_layer_count"].value = float(self._texture_manager.layer_count)
         self._texture_manager.bind(location=0)
         if len(data_payload) > self._instance_data_vbo.size:
             self._instance_data_vbo.orphan(len(data_payload))
@@ -1024,7 +1041,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             self._instance_color_vbo.orphan(len(color_payload))
         self._instance_data_vbo.write(data_payload)
         self._instance_color_vbo.write(color_payload)
-        self._vao.render(moderngl.TRIANGLE_STRIP, instances=self.world.size)
+        self._vao.render(moderngl.TRIANGLE_STRIP, vertices=4, instances=self.world.size)
 
     def create_window(self):
         """Create a GLFW window and configure an instanced quad-rendering pipeline."""
@@ -1091,6 +1108,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 const float GLOW_ALPHA_CONTRIBUTION = $glow_alpha_contribution;
                 const float ALPHA_DISCARD_THRESHOLD = $alpha_discard_threshold;
                 uniform sampler2DArray texture_array;
+                uniform float texture_layer_count;
                 in vec3 v_color;
                 in vec2 v_local_pos;
                 in vec2 v_half_size;
@@ -1104,7 +1122,8 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 }
 
                 void main() {
-                    if (v_costume_id >= 0.0) {
+                    if (v_costume_id >= 0.0 && texture_layer_count > 0.0) {
+                        float texture_layer = clamp(floor(v_costume_id + 0.5), 0.0, texture_layer_count - 1.0);
                         // Map local quad coordinates from [-half_size, +half_size] into [0, 1] UV space.
                         vec2 uv = (v_local_pos / (v_half_size * 2.0)) + vec2(0.5);
                         // Flip Y because image files are top-down while OpenGL texture origin is bottom-up.
@@ -1112,7 +1131,10 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
                             discard;
                         }
-                        fragColor = texture(texture_array, vec3(uv, v_costume_id));
+                        fragColor = texture(texture_array, vec3(uv, texture_layer));
+                        if (fragColor.a < ALPHA_DISCARD_THRESHOLD) {
+                            discard;
+                        }
                         return;
                     }
                     float cornerRadius = clamp(v_params.x, 0.0, min(v_half_size.x, v_half_size.y));
@@ -1162,6 +1184,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._instance_data_vbo = self._ctx.buffer(reserve=self._INITIAL_INSTANCE_DATA_BUFFER_SIZE)
         self._instance_color_vbo = self._ctx.buffer(reserve=self._INITIAL_INSTANCE_COLOR_BUFFER_SIZE)
         self._program["texture_array"].value = 0
+        self._program["texture_layer_count"].value = 0.0
         self._vao = self._ctx.vertex_array(
             self._program,
             [
