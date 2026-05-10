@@ -6,7 +6,7 @@ Neural UI core with:
 - event dispatch (hover/click) and top-most hit detection
 - optional `ModernGLRenderer` (glfw + moderngl shader pipeline) for GPU rendering
 - optional `InstancedModernGLRenderer` for batched instanced quad rendering with optional per-object colors
-- optional sprite costumes/flipbook animation via texture-array layers (`SpriteObject`)
+- optional per-object image costumes/flipbook animation via texture-array layers (`Object`/`SpriteObject`)
 
 Run the example:
 - `python example.py`

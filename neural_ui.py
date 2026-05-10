@@ -54,7 +54,12 @@ class Object:
     state: ObjectState = ObjectState.ACTIVE
     on_hover: Optional[Callable[["Object"], None]] = None
     on_click: Optional[Callable[["Object"], None]] = None
+    costumes: Sequence[str] = field(default_factory=tuple)
+    spritesheet: Optional[str] = None
+    grid: Optional[Tuple[int, int]] = None
+    fps: float = 0.0
     tensor_index: Optional[int] = None
+    _texture_layers: Optional[List[int]] = field(default=None, init=False, repr=False, compare=False)
     _world: Optional["NeuralWorld"] = field(default=None, init=False, repr=False, compare=False)
     _suspend_world_sync: bool = field(default=False, init=False, repr=False, compare=False)
 
@@ -101,11 +106,7 @@ class ObjectGroup(Object):
 
 @dataclass
 class SpriteObject(Object):
-    costumes: Sequence[str] = field(default_factory=tuple)
-    spritesheet: Optional[str] = None
-    grid: Optional[Tuple[int, int]] = None
-    fps: float = 0.0
-    _texture_layers: Optional[List[int]] = field(default=None, init=False, repr=False, compare=False)
+    pass
 
 
 class NeuralWorld:
@@ -1201,7 +1202,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         if self._texture_manager is None:
             return
         for obj in self.world._objects:
-            if not isinstance(obj, SpriteObject):
+            if not ((obj.spritesheet is not None and obj.grid is not None) or obj.costumes):
                 continue
             if obj.tensor_index is None:
                 continue
