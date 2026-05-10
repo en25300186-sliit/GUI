@@ -96,6 +96,32 @@ class NeuralWorldTests(unittest.TestCase):
         self.assertAlmostEqual(row[1], 1.5)
         self.assertAlmostEqual(row[4], 5.0)
 
+    def test_deep_hierarchy_resolves_without_recursive_stack_usage(self):
+        world = NeuralWorld(use_cupy=False)
+        parent_index = -1
+        depth = 2000
+        for _ in range(depth):
+            parent_index = world.register(Object(x=1, y=1, width=1, height=1, z=1, on_hover=lambda _: None), parent_index)
+
+        row = world.global_row(parent_index)
+        self.assertAlmostEqual(row[0], float(depth))
+        self.assertAlmostEqual(row[1], float(depth))
+        self.assertAlmostEqual(row[4], float(depth))
+
+    def test_cycle_detection_raises_value_error(self):
+        world = NeuralWorld(use_cupy=False)
+        first = world.register(Object(x=0, y=0, width=1, height=1, on_hover=lambda _: None))
+        second = world.register(Object(x=1, y=1, width=1, height=1, on_hover=lambda _: None), first)
+
+        if world.backend == "python":
+            world._python_parent_index[first] = second
+        else:
+            world._parent_index[first] = second
+        world._global_dirty = True
+
+        with self.assertRaises(ValueError):
+            world.global_row(second)
+
 
 if __name__ == "__main__":
     unittest.main()

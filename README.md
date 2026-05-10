@@ -2,6 +2,6 @@
 
 Neural UI core with:
 - preallocated tensor-backed object storage for NumPy/CuPy backends
-- GPU/array-side parent-child global transform propagation
+- iterative GPU/array-side parent-child global transform propagation (no recursive hierarchy walk)
 - event dispatch (hover/click) and top-most hit detection
-- optional `Win32Renderer` (pywin32) for native window creation and drawing
+- optional `ModernGLRenderer` (glfw + moderngl shader pipeline) for GPU rendering
