@@ -456,7 +456,10 @@ class NeuralWorld:
         active_advancement = active_animation & (advanced_frames > 0)
         if not bool(self._to_scalar(active_advancement.any())):
             return
-        self._animation_accumulator[: self._size][active_advancement] -= advanced_frames[active_advancement]
+        updated_accumulator = self._animation_accumulator[: self._size] - advanced_frames.astype(self.xp.float32)
+        self._animation_accumulator[: self._size] = self.xp.where(
+            active_advancement, updated_accumulator, self._animation_accumulator[: self._size]
+        )
         start_layer = self._animation_start_layer[: self._size]
         current_costume = rows[:, self._ROW_COSTUME_ID]
         relative_frame = current_costume - start_layer
@@ -674,7 +677,6 @@ class TextureManager:
         if np is None:
             raise RuntimeError("TextureManager requires numpy")
         self._ctx = ctx
-        self._path_to_layer: Dict[str, int] = {}
         self._layer_pixels: List[Any] = []
         self._texture_array = None
         self._width: Optional[int] = None
@@ -683,9 +685,6 @@ class TextureManager:
 
     def register_image(self, image_path: str) -> int:
         normalized_path = str(Path(image_path).expanduser().resolve())
-        existing = self._path_to_layer.get(normalized_path)
-        if existing is not None:
-            return existing
         pixels = self._load_rgba_pixels(normalized_path)
         height, width = int(pixels.shape[0]), int(pixels.shape[1])
         if self._width is None or self._height is None:
@@ -697,7 +696,6 @@ class TextureManager:
             )
         layer_id = len(self._layer_pixels)
         self._layer_pixels.append(pixels)
-        self._path_to_layer[normalized_path] = layer_id
         self._dirty = True
         return layer_id
 

@@ -1,6 +1,6 @@
 import unittest
 
-from neural_ui import NeuralWorld, Object, ObjectGroup, ObjectState
+from neural_ui import NeuralWorld, Object, ObjectGroup, ObjectState, SpriteObject
 
 
 class NeuralWorldTests(unittest.TestCase):
@@ -235,6 +235,35 @@ class NeuralWorldTests(unittest.TestCase):
         obj.x = 10.0
         row = world.global_row(index)
         self.assertAlmostEqual(row[NeuralWorld._ROW_X], 10.0)
+
+    def test_register_initializes_costume_id_to_negative_one(self):
+        world = NeuralWorld(use_cupy=False)
+        idx = world.register(Object(x=0.0, y=0.0, width=1, height=1, on_hover=lambda _: None))
+        row = world.global_row(idx)
+        self.assertEqual(row[NeuralWorld._ROW_COSTUME_ID], -1.0)
+
+    def test_sprite_animation_advances_costume_id_with_fps(self):
+        world = NeuralWorld(use_cupy=False)
+        sprite = SpriteObject(
+            x=0.0,
+            y=0.0,
+            width=1.0,
+            height=1.0,
+            costumes=["frame0.png", "frame1.png", "frame2.png"],
+            fps=2.0,
+            on_hover=lambda _: None,
+        )
+        idx = world.register(sprite)
+        world.configure_sprite_animation(idx, [10, 11, 12], fps=2.0)
+
+        world.update(0.25)
+        self.assertEqual(world.global_row(idx)[NeuralWorld._ROW_COSTUME_ID], 10.0)
+
+        world.update(0.25)
+        self.assertEqual(world.global_row(idx)[NeuralWorld._ROW_COSTUME_ID], 11.0)
+
+        world.update(1.0)
+        self.assertEqual(world.global_row(idx)[NeuralWorld._ROW_COSTUME_ID], 10.0)
 
 
 if __name__ == "__main__":
