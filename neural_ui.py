@@ -697,9 +697,7 @@ class TextureManager:
             self._width = width
             self._height = height
         elif width != self._width or height != self._height:
-            raise ValueError(
-                f"Texture {normalized_path} has size {width}x{height}, expected {self._width}x{self._height} for array packing"
-            )
+            pixels = self._resize_rgba_pixels(pixels, target_width=self._width, target_height=self._height)
         layer_id = len(self._layer_pixels)
         self._layer_pixels.append(pixels)
         self._dirty = True
@@ -732,10 +730,6 @@ class TextureManager:
         if self._width is None or self._height is None:
             self._width = frame_w
             self._height = frame_h
-        elif frame_w != self._width or frame_h != self._height:
-            raise ValueError(
-                f"Spritesheet frames from {normalized_path} are {frame_w}x{frame_h}, expected {self._width}x{self._height} for array packing"
-            )
 
         layer_ids: List[int] = []
         for row in range(rows):
@@ -745,6 +739,10 @@ class TextureManager:
                 x0 = col * frame_w
                 x1 = x0 + frame_w
                 frame_pixels = np.ascontiguousarray(pixels[y0:y1, x0:x1, :])
+                if frame_w != self._width or frame_h != self._height:
+                    frame_pixels = self._resize_rgba_pixels(
+                        frame_pixels, target_width=self._width, target_height=self._height
+                    )
                 layer_id = len(self._layer_pixels)
                 self._layer_pixels.append(frame_pixels)
                 layer_ids.append(layer_id)
@@ -784,6 +782,23 @@ class TextureManager:
                 raise ValueError(f"Unsupported channel count in image: {path}")
             return image.astype(np.uint8)
         raise RuntimeError("Texture loading requires Pillow or OpenCV")
+
+    @staticmethod
+    def _resize_rgba_pixels(pixels, *, target_width: int, target_height: int):
+        source_height, source_width = int(pixels.shape[0]), int(pixels.shape[1])
+        if source_width == target_width and source_height == target_height:
+            return pixels
+        if Image is not None:
+            resized = Image.fromarray(pixels, mode="RGBA").resize(
+                (target_width, target_height),
+                Image.Resampling.NEAREST if hasattr(Image, "Resampling") else Image.NEAREST,
+            )
+            return np.array(resized, dtype=np.uint8)
+        if cv2 is not None:
+            return cv2.resize(pixels, (target_width, target_height), interpolation=cv2.INTER_NEAREST).astype(np.uint8)
+        y_indices = np.linspace(0, source_height - 1, target_height).astype(np.int32)
+        x_indices = np.linspace(0, source_width - 1, target_width).astype(np.int32)
+        return np.ascontiguousarray(pixels[y_indices][:, x_indices, :], dtype=np.uint8)
 
     def _ensure_uploaded(self) -> None:
         if not self._dirty:
@@ -1003,7 +1018,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._instance_data_vbo = None
         self._instance_color_vbo = None
         self._texture_manager = None
-        self._sprite_configured: Dict[int, bool] = {}
+        self._sprite_configured: Dict[int, Tuple[Tuple[str, ...], Optional[str], Optional[Tuple[int, int]], float]] = {}
         if not self.random_object_colors:
             self.world.set_default_color(self.object_color)
 
@@ -1017,18 +1032,10 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         viewport_width, viewport_height = self._framebuffer_size()
         self._ctx.viewport = (0, 0, viewport_width, viewport_height)
         self._ctx.clear(*self.background_color, 1.0)
-        if self.world.backend == "python":
-            super()._draw_world()
-            return
         if self.world.size == 0:
             return
         self._sync_sprite_costumes()
-        self.world.sync_global_transforms()
-        rows = self.world._global_tensor[: self.world.size]
-        instance_data_tensor = rows[:, self._INSTANCE_DATA_COLUMNS]
-        color_tensor = self.world.color_tensor[: self.world.size]
-        data_payload = self._as_cpu_tensor(instance_data_tensor).tobytes()
-        color_payload = self._as_cpu_tensor(color_tensor).tobytes()
+        data_payload, color_payload = self._build_instance_payloads()
         if not data_payload:
             return
         self._program["aspect"].value = viewport_width / viewport_height
@@ -1045,6 +1052,24 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._instance_data_vbo.write(data_payload)
         self._instance_color_vbo.write(color_payload)
         self._vao.render(moderngl.TRIANGLE_STRIP, vertices=4, instances=self.world.size)
+
+    def _build_instance_payloads(self) -> Tuple[bytes, bytes]:
+        self.world.sync_global_transforms()
+        if self.world.backend == "python":
+            instance_rows = [
+                [float(row[column]) for column in self._INSTANCE_DATA_COLUMNS]
+                for row in self.world._python_global_rows[: self.world.size]
+            ]
+            if not instance_rows:
+                return b"", b""
+            instance_data_tensor = np.asarray(instance_rows, dtype=np.float32)
+            color_tensor = np.asarray(self.world.color_tensor[: self.world.size], dtype=np.float32)
+            return instance_data_tensor.tobytes(), color_tensor.tobytes()
+
+        rows = self.world._global_tensor[: self.world.size]
+        instance_data_tensor = rows[:, self._INSTANCE_DATA_COLUMNS]
+        color_tensor = self.world.color_tensor[: self.world.size]
+        return self._as_cpu_tensor(instance_data_tensor).tobytes(), self._as_cpu_tensor(color_tensor).tobytes()
 
     def create_window(self):
         """Create a GLFW window and configure an instanced quad-rendering pipeline."""
@@ -1207,7 +1232,13 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             if obj.tensor_index is None:
                 continue
             object_key = id(obj)
-            if self._sprite_configured.get(object_key):
+            signature = (
+                tuple(str(path) for path in obj.costumes),
+                str(obj.spritesheet) if obj.spritesheet is not None else None,
+                tuple(int(v) for v in obj.grid) if obj.grid is not None else None,
+                float(obj.fps),
+            )
+            if self._sprite_configured.get(object_key) == signature:
                 continue
             layer_ids: List[int]
             if obj.spritesheet is not None and obj.grid is not None:
@@ -1219,7 +1250,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 layer_ids = []
             obj._texture_layers = layer_ids
             self.world.configure_sprite_animation(obj.tensor_index, layer_ids, obj.fps)
-            self._sprite_configured[object_key] = True
+            self._sprite_configured[object_key] = signature
 
 
 
