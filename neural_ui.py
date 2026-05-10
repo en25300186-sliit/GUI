@@ -685,7 +685,10 @@ class TextureManager:
 
     def register_image(self, image_path: str) -> int:
         normalized_path = str(Path(image_path).expanduser().resolve())
-        pixels = self._load_rgba_pixels(normalized_path)
+        try:
+            pixels = self._load_rgba_pixels(normalized_path)
+        except Exception as exc:
+            raise ValueError(f"Failed to register texture image: {image_path}") from exc
         height, width = int(pixels.shape[0]), int(pixels.shape[1])
         if self._width is None or self._height is None:
             self._width = width
@@ -1128,12 +1131,13 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 continue
             if obj.tensor_index is None:
                 continue
-            if self._sprite_configured.get(obj.tensor_index):
+            object_key = id(obj)
+            if self._sprite_configured.get(object_key):
                 continue
             layer_ids = self._texture_manager.register_images(obj.costumes)
             obj._texture_layers = layer_ids
             self.world.configure_sprite_animation(obj.tensor_index, layer_ids, obj.fps)
-            self._sprite_configured[obj.tensor_index] = True
+            self._sprite_configured[object_key] = True
 
 
 
