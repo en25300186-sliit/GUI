@@ -860,11 +860,13 @@ class ModernGLRenderer:
         return left_ndc, top_ndc, right_ndc, bottom_ndc
 
     def _framebuffer_size(self) -> Tuple[int, int]:
+        fallback_width = max(int(self.width), 1)
+        fallback_height = max(int(self.height), 1)
         if self.window is None:
-            return self.width, self.height
+            return fallback_width, fallback_height
         framebuffer_w, framebuffer_h = glfw.get_framebuffer_size(self.window)
         if framebuffer_w <= 0 or framebuffer_h <= 0:
-            return self.width, self.height
+            return fallback_width, fallback_height
         return int(framebuffer_w), int(framebuffer_h)
 
     def _build_vertices(self, viewport_width: int, viewport_height: int) -> bytes:
@@ -1122,7 +1124,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 }
 
                 void main() {
-                    if (v_costume_id >= 0.0 && texture_layer_count > 0.0) {
+                    if (v_costume_id >= 0.0 && texture_layer_count > 0.5) {
                         float texture_layer = clamp(round(v_costume_id), 0.0, texture_layer_count - 1.0);
                         // Map local quad coordinates from [-half_size, +half_size] into [0, 1] UV space.
                         vec2 uv = (v_local_pos / (v_half_size * 2.0)) + vec2(0.5);
