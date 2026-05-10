@@ -97,9 +97,10 @@ class NeuralWorld:
     _ROW_CORNER_RADIUS = 6
     _ROW_BORDER_THICKNESS = 7
     _ROW_SOFTNESS = 8
-    _ROW_UNUSED = 9
+    _ROW_UNUSED = 9  # Reserved for future per-instance shader attributes.
     _WORLD_COLUMNS = 10
     _MOTION_COLUMNS = 6
+    _MOTION_POSITION_SLICE = slice(_ROW_X, _ROW_Y + 1)
     _COLOR_CHANNELS = 3
     _DEFAULT_CORNER_RADIUS_FACTOR = 0.1
     _DEFAULT_BORDER_THICKNESS = 0.01
@@ -288,8 +289,9 @@ class NeuralWorld:
                 vel = self.velocity_tensor[idx]
                 row[self._ROW_X] += vel[self._ROW_X] * dt
                 row[self._ROW_Y] += vel[self._ROW_Y] * dt
-                for axis in (self._ROW_X, self._ROW_Y):
-                    vel[axis] *= self.friction_coefficient
+                vel[self._MOTION_POSITION_SLICE] = [
+                    component * self.friction_coefficient for component in vel[self._MOTION_POSITION_SLICE]
+                ]
                 tracked = row[self._ROW_STATE] in (active_state, out_of_screen_state)
                 outside_screen = (
                     abs(row[self._ROW_X]) > self._SCREEN_BOUNDARY or abs(row[self._ROW_Y]) > self._SCREEN_BOUNDARY
@@ -309,8 +311,8 @@ class NeuralWorld:
             return
         rows = self.world_tensor[: self._size]
         velocity = self.velocity_tensor[: self._size]
-        rows[:, :2] += velocity[:, :2] * float(dt)
-        velocity[:, :2] *= self.friction_coefficient
+        rows[:, self._MOTION_POSITION_SLICE] += velocity[:, self._MOTION_POSITION_SLICE] * float(dt)
+        velocity[:, self._MOTION_POSITION_SLICE] *= self.friction_coefficient
         self._global_dirty = True
         self._sync_global_transforms()
 
@@ -318,17 +320,9 @@ class NeuralWorld:
         states = rows[:, self._ROW_STATE]
         x_positions = global_rows[:, self._ROW_X]
         y_positions = global_rows[:, self._ROW_Y]
-        outside = (
-            (x_positions < -self._SCREEN_BOUNDARY)
-            | (x_positions > self._SCREEN_BOUNDARY)
-            | (y_positions < -self._SCREEN_BOUNDARY)
-            | (y_positions > self._SCREEN_BOUNDARY)
-        )
-        inside_reactivate = (
-            (x_positions >= -self._REACTIVATE_BOUNDARY)
-            & (x_positions <= self._REACTIVATE_BOUNDARY)
-            & (y_positions >= -self._REACTIVATE_BOUNDARY)
-            & (y_positions <= self._REACTIVATE_BOUNDARY)
+        outside = (self.xp.abs(x_positions) > self._SCREEN_BOUNDARY) | (self.xp.abs(y_positions) > self._SCREEN_BOUNDARY)
+        inside_reactivate = (self.xp.abs(x_positions) <= self._REACTIVATE_BOUNDARY) & (
+            self.xp.abs(y_positions) <= self._REACTIVATE_BOUNDARY
         )
         tracked_states = (states == float(ObjectState.ACTIVE)) | (states == float(ObjectState.OUTOFSCREEN))
         states[tracked_states & outside] = float(ObjectState.OUTOFSCREEN)
