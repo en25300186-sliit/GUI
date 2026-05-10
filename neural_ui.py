@@ -54,7 +54,7 @@ class Object:
     state: ObjectState = ObjectState.ACTIVE
     on_hover: Optional[Callable[["Object"], None]] = None
     on_click: Optional[Callable[["Object"], None]] = None
-    costumes: Tuple[str, ...] = field(default_factory=tuple)
+    costumes: Sequence[str] = field(default_factory=tuple)
     spritesheet: Optional[str] = None
     grid: Optional[Tuple[int, int]] = None
     fps: float = 0.0
