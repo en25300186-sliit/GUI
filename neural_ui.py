@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 try:  # pragma: no cover - exercised when CuPy is installed
     import cupy as cp
@@ -108,9 +108,9 @@ class NeuralWorld:
         if width_px <= 0 or height_px <= 0:
             raise ValueError("Viewport dimensions must be positive")
         aspect = width_px / height_px
-        x_ndc = ((mouse_x_px / width_px) * 2.0 - 1.0) * aspect
-        y_ndc = 1.0 - (mouse_y_px / height_px) * 2.0
-        return x_ndc, y_ndc
+        x_world = ((mouse_x_px / width_px) * 2.0 - 1.0) * aspect
+        y_world = 1.0 - (mouse_y_px / height_px) * 2.0
+        return x_world, y_world
 
     @staticmethod
     def _has_handler(obj: Object, event: str) -> bool:
@@ -120,7 +120,7 @@ class NeuralWorld:
             return obj.on_click is not None
         return False
 
-    def _to_scalar(self, value: object) -> object:
+    def _to_scalar(self, value: Any) -> Any:
         if self.backend in {"python", "numpy"}:
             return value
         return self.xp.asnumpy(value)
