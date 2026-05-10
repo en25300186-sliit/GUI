@@ -334,7 +334,7 @@ class NeuralWorld:
 
         start_layer = int(frame_layers[0])
         frame_count = len(frame_layers)
-        if int(frame_layers[-1]) != int(start_layer + frame_count - 1):
+        if any(int(start_layer + offset) != int(layer) for offset, layer in enumerate(frame_layers)):
             raise ValueError("frame_layers must be contiguous texture-array layer IDs")
         self.set_costume_id(index, float(start_layer))
         if self.backend == "python":
@@ -745,7 +745,7 @@ class TextureManager:
             (int(self._width), int(self._height), len(self._layer_pixels)),
             components=4,
             data=stacked_pixels.tobytes(),
-            dtype="f1",
+            dtype="u1",
         )
         self._texture_array.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._texture_array.repeat_x = False
