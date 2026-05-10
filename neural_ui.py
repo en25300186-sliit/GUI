@@ -803,19 +803,19 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     v_params = in_params;
                 }
             """,
-            fragment_shader=f"""
+            fragment_shader="""
                 #version 330
-                const float MIN_SOFTNESS = {self._SHADER_MIN_SOFTNESS};
-                const float GLOW_FALLOFF = {self._SHADER_GLOW_FALLOFF};
-                const float GLOW_INTENSITY = {self._SHADER_GLOW_INTENSITY};
-                const float SHADOW_OFFSET = {self._SHADER_SHADOW_OFFSET};
-                const float SHADOW_FALLOFF = {self._SHADER_SHADOW_FALLOFF};
-                const float SHADOW_INTENSITY = {self._SHADER_SHADOW_INTENSITY};
-                const float BORDER_BRIGHTNESS = {self._SHADER_BORDER_BRIGHTNESS};
-                const float GLOW_CONTRIBUTION = {self._SHADER_GLOW_CONTRIBUTION};
-                const float SHADOW_CONTRIBUTION = {self._SHADER_SHADOW_CONTRIBUTION};
-                const float GLOW_ALPHA_CONTRIBUTION = {self._SHADER_GLOW_ALPHA_CONTRIBUTION};
-                const float ALPHA_DISCARD_THRESHOLD = {self._SHADER_ALPHA_DISCARD_THRESHOLD};
+                const float MIN_SOFTNESS = %(min_softness)s;
+                const float GLOW_FALLOFF = %(glow_falloff)s;
+                const float GLOW_INTENSITY = %(glow_intensity)s;
+                const float SHADOW_OFFSET = %(shadow_offset)s;
+                const float SHADOW_FALLOFF = %(shadow_falloff)s;
+                const float SHADOW_INTENSITY = %(shadow_intensity)s;
+                const float BORDER_BRIGHTNESS = %(border_brightness)s;
+                const float GLOW_CONTRIBUTION = %(glow_contribution)s;
+                const float SHADOW_CONTRIBUTION = %(shadow_contribution)s;
+                const float GLOW_ALPHA_CONTRIBUTION = %(glow_alpha_contribution)s;
+                const float ALPHA_DISCARD_THRESHOLD = %(alpha_discard_threshold)s;
                 in vec3 v_color;
                 in vec2 v_local_pos;
                 in vec2 v_half_size;
@@ -853,7 +853,20 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     }
                     fragColor = vec4(color, clamp(alpha, 0.0, 1.0));
                 }
-            """,
+            """
+            % {
+                "min_softness": self._SHADER_MIN_SOFTNESS,
+                "glow_falloff": self._SHADER_GLOW_FALLOFF,
+                "glow_intensity": self._SHADER_GLOW_INTENSITY,
+                "shadow_offset": self._SHADER_SHADOW_OFFSET,
+                "shadow_falloff": self._SHADER_SHADOW_FALLOFF,
+                "shadow_intensity": self._SHADER_SHADOW_INTENSITY,
+                "border_brightness": self._SHADER_BORDER_BRIGHTNESS,
+                "glow_contribution": self._SHADER_GLOW_CONTRIBUTION,
+                "shadow_contribution": self._SHADER_SHADOW_CONTRIBUTION,
+                "glow_alpha_contribution": self._SHADER_GLOW_ALPHA_CONTRIBUTION,
+                "alpha_discard_threshold": self._SHADER_ALPHA_DISCARD_THRESHOLD,
+            },
         )
         quad = array("f", (-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0))
         self._quad_vbo = self._ctx.buffer(quad.tobytes())
