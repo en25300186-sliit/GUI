@@ -708,21 +708,23 @@ class TextureManager:
         return [self.register_image(path) for path in image_paths]
 
     def register_spritesheet(self, image_path: str, cols: int, rows: int) -> List[int]:
+        cols = int(cols)
+        rows = int(rows)
         if cols <= 0 or rows <= 0:
-            raise ValueError("Spritesheet grid dimensions must be positive")
+            raise ValueError(f"Spritesheet grid dimensions must be positive, got cols={cols}, rows={rows}")
         normalized_path = str(Path(image_path).expanduser().resolve())
         try:
             pixels = self._load_rgba_pixels(normalized_path)
         except Exception as exc:
             raise ValueError(f"Failed to register spritesheet image: {image_path}") from exc
-        height, width = int(pixels.shape[0]), int(pixels.shape[1])
-        frame_w = width // int(cols)
-        frame_h = height // int(rows)
+        width, height = int(pixels.shape[1]), int(pixels.shape[0])
+        frame_w = width // cols
+        frame_h = height // rows
         if frame_w <= 0 or frame_h <= 0:
             raise ValueError(
                 f"Invalid spritesheet grid {cols}x{rows} for image size {width}x{height}: frame size must be positive"
             )
-        if width % int(cols) != 0 or height % int(rows) != 0:
+        if width % cols != 0 or height % rows != 0:
             raise ValueError(
                 f"Spritesheet {normalized_path} size {width}x{height} is not evenly divisible by grid {cols}x{rows}"
             )
@@ -735,8 +737,8 @@ class TextureManager:
             )
 
         layer_ids: List[int] = []
-        for row in range(int(rows)):
-            for col in range(int(cols)):
+        for row in range(rows):
+            for col in range(cols):
                 y0 = row * frame_h
                 y1 = y0 + frame_h
                 x0 = col * frame_w
@@ -1105,6 +1107,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     if (v_costume_id >= 0.0) {
                         // Map local quad coordinates from [-half_size, +half_size] into [0, 1] UV space.
                         vec2 uv = (v_local_pos / (v_half_size * 2.0)) + vec2(0.5);
+                        // Flip Y because image files are top-down while OpenGL texture origin is bottom-up.
                         uv.y = 1.0 - uv.y;
                         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
                             discard;
@@ -1183,7 +1186,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             layer_ids: List[int]
             if obj.spritesheet is not None and obj.grid is not None:
                 cols, rows = obj.grid
-                layer_ids = self._texture_manager.register_spritesheet(obj.spritesheet, int(cols), int(rows))
+                layer_ids = self._texture_manager.register_spritesheet(obj.spritesheet, cols, rows)
             elif obj.costumes:
                 layer_ids = self._texture_manager.register_images(obj.costumes)
             else:
