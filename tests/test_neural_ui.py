@@ -163,6 +163,7 @@ class NeuralWorldTests(unittest.TestCase):
 
     def test_update_applies_velocity_and_state_switching(self):
         world = NeuralWorld(use_cupy=False)
+        # Start just inside boundary so one update step pushes it to OUTOFSCREEN.
         idx_active = world.register(Object(x=1.45, y=0.0, width=1, height=1, state=ObjectState.ACTIVE, on_hover=lambda _: None))
         idx_hidden = world.register(Object(x=1.6, y=0.0, width=1, height=1, state=ObjectState.HIDDEN, on_hover=lambda _: None))
 
