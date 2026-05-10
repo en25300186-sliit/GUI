@@ -172,7 +172,9 @@ class NeuralWorld:
             for idx, row in enumerate(self.world_tensor):
                 self._python_global_rows[idx] = row[:]
                 parent_idx = self._python_parent_index[idx]
-                if parent_idx < -1 or parent_idx >= object_count:
+                if parent_idx < -1:
+                    raise ValueError(f"Parent index {parent_idx} for object {idx} is invalid (must be >= -1)")
+                if parent_idx >= object_count:
                     raise ValueError(f"Parent index {parent_idx} for object {idx} is out of bounds")
 
             resolved = [parent_idx == -1 for parent_idx in self._python_parent_index]
@@ -354,6 +356,11 @@ class NeuralWorld:
 
 
 class ModernGLRenderer:
+    _VERTEX_FLOATS = 5
+    _FLOAT_SIZE_BYTES = 4
+    _VERTEX_STRIDE_BYTES = _VERTEX_FLOATS * _FLOAT_SIZE_BYTES
+    _INITIAL_VBO_SIZE_BYTES = 8192
+
     def __init__(
         self,
         world: NeuralWorld,
@@ -433,7 +440,7 @@ class ModernGLRenderer:
         if len(payload) > self._vbo.size:
             self._vbo.orphan(len(payload))
         self._vbo.write(payload)
-        self._vao.render(moderngl.TRIANGLES, vertices=len(payload) // (5 * 4))
+        self._vao.render(moderngl.TRIANGLES, vertices=len(payload) // self._VERTEX_STRIDE_BYTES)
 
     def create_window(self):
         if not glfw.init():
@@ -469,7 +476,7 @@ class ModernGLRenderer:
                 }
             """,
         )
-        self._vbo = self._ctx.buffer(reserve=8192)
+        self._vbo = self._ctx.buffer(reserve=self._INITIAL_VBO_SIZE_BYTES)
         self._vao = self._ctx.simple_vertex_array(self._program, self._vbo, "in_pos", "in_color")
         return self.window
 
