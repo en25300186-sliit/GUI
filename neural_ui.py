@@ -123,7 +123,7 @@ class NeuralWorld:
     def _to_scalar(self, value: object) -> object:
         if self.backend in {"python", "numpy"}:
             return value
-        return cp.asnumpy(value)
+        return self.xp.asnumpy(value)
 
     def hit_mask(self, x_world: float, y_world: float, *, event: str = "hover"):
         if (self.backend == "python" and not self.world_tensor) or (
