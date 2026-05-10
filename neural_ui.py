@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
 from string import Template
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 try:  # pragma: no cover - exercised when CuPy is installed
     import cupy as cp
@@ -785,6 +785,7 @@ class TextureManager:
 
     @staticmethod
     def _resize_rgba_pixels(pixels, *, target_width: int, target_height: int):
+        """Resize RGBA pixel layers to a common texture-array size."""
         source_height, source_width = int(pixels.shape[0]), int(pixels.shape[1])
         if source_width == target_width and source_height == target_height:
             return pixels
@@ -984,6 +985,12 @@ class ModernGLRenderer:
 class InstancedModernGLRenderer(ModernGLRenderer):
     """ModernGL renderer that uses instanced quads for better batching efficiency."""
 
+    class SpriteSignature(NamedTuple):
+        costumes: Tuple[str, ...]
+        spritesheet: Optional[str]
+        grid: Optional[Tuple[int, int]]
+        fps: float
+
     _INITIAL_INSTANCE_DATA_BUFFER_SIZE = 20 * 1024
     _INITIAL_INSTANCE_COLOR_BUFFER_SIZE = 12 * 1024
     _SHADER_MIN_SOFTNESS = 0.0005
@@ -1018,7 +1025,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._instance_data_vbo = None
         self._instance_color_vbo = None
         self._texture_manager = None
-        self._sprite_configured: Dict[int, Tuple[Tuple[str, ...], Optional[str], Optional[Tuple[int, int]], float]] = {}
+        self._sprite_configured: Dict[int, InstancedModernGLRenderer.SpriteSignature] = {}
         if not self.random_object_colors:
             self.world.set_default_color(self.object_color)
 
@@ -1054,6 +1061,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._vao.render(moderngl.TRIANGLE_STRIP, vertices=4, instances=self.world.size)
 
     def _build_instance_payloads(self) -> Tuple[bytes, bytes]:
+        """Build per-instance geometry/color payloads for buffer uploads."""
         self.world.sync_global_transforms()
         if self.world.backend == "python":
             instance_rows = [
@@ -1232,7 +1240,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             if obj.tensor_index is None:
                 continue
             object_key = id(obj)
-            signature = (
+            signature = InstancedModernGLRenderer.SpriteSignature(
                 tuple(str(path) for path in obj.costumes),
                 str(obj.spritesheet) if obj.spritesheet is not None else None,
                 tuple(int(v) for v in obj.grid) if obj.grid is not None else None,
