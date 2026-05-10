@@ -54,7 +54,7 @@ class Object:
     state: ObjectState = ObjectState.ACTIVE
     on_hover: Optional[Callable[["Object"], None]] = None
     on_click: Optional[Callable[["Object"], None]] = None
-    costumes: Sequence[str] = field(default_factory=tuple)
+    costumes: Sequence[str] = field(default_factory=list)
     spritesheet: Optional[str] = None
     grid: Optional[Tuple[int, int]] = None
     fps: float = 0.0
@@ -1202,9 +1202,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         if self._texture_manager is None:
             return
         for obj in self.world._objects:
-            has_spritesheet = obj.spritesheet is not None and obj.grid is not None
-            has_costumes = bool(obj.costumes)
-            if not has_spritesheet and not has_costumes:
+            if not ((obj.spritesheet is not None and obj.grid is not None) or obj.costumes):
                 continue
             if obj.tensor_index is None:
                 continue
@@ -1212,10 +1210,10 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             if self._sprite_configured.get(object_key):
                 continue
             layer_ids: List[int]
-            if has_spritesheet:
+            if obj.spritesheet is not None and obj.grid is not None:
                 cols, rows = obj.grid
                 layer_ids = self._texture_manager.register_spritesheet(obj.spritesheet, cols, rows)
-            elif has_costumes:
+            elif obj.costumes:
                 layer_ids = self._texture_manager.register_images(obj.costumes)
             else:
                 layer_ids = []
