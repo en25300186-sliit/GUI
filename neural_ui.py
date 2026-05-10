@@ -540,7 +540,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             )
             if obj.tensor_index == self.world._last_hover_index:
                 color = self.hover_color
-            elif self.random_object_colors and obj.tensor_index is not None:
+            elif self.random_object_colors:
                 color = self._index_color(obj.tensor_index)
             else:
                 color = self.object_color

@@ -29,7 +29,7 @@ def _window_should_close(renderer: nui.InstancedModernGLRenderer) -> bool:
 
 
 def main() -> None:
-    world = nui.NeuralWorld(use_cupy=nui.cp is not None, initial_capacity=5_000, growth_chunk=2_000)
+    world = nui.NeuralWorld(use_cupy=nui.cp is not None, initial_capacity=5000, growth_chunk=2000)
 
     ship = nui.ObjectGroup(x=0.0, y=0.0, width=0.08, height=0.08, z=2.0)
     drone_count = 200
