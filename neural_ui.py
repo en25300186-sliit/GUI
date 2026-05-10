@@ -100,6 +100,9 @@ class NeuralWorld:
     _WORLD_COLUMNS = 10
     _MOTION_COLUMNS = 6
     _COLOR_CHANNELS = 3
+    _DEFAULT_CORNER_RADIUS_FACTOR = 0.1
+    _DEFAULT_BORDER_THICKNESS = 0.01
+    _DEFAULT_SOFTNESS = 0.02
     _SCREEN_BOUNDARY = 1.5
     _REACTIVATE_BOUNDARY = 1.1
 
@@ -187,7 +190,7 @@ class NeuralWorld:
         self._capacity = new_capacity
 
     def _register_single(self, obj: Object, parent_index: int = -1) -> int:
-        corner_radius = min(obj.width, obj.height) * 0.1
+        corner_radius = min(obj.width, obj.height) * self._DEFAULT_CORNER_RADIUS_FACTOR
         row = [
             obj.x,
             obj.y,
@@ -196,8 +199,8 @@ class NeuralWorld:
             obj.z,
             float(obj.state),
             corner_radius,
-            0.01,
-            0.02,
+            self._DEFAULT_BORDER_THICKNESS,
+            self._DEFAULT_SOFTNESS,
             0.0,
         ]
         if self.backend == "python":
@@ -690,6 +693,17 @@ class InstancedModernGLRenderer(ModernGLRenderer):
 
     _INITIAL_INSTANCE_DATA_BUFFER_SIZE = 20 * 1024
     _INITIAL_INSTANCE_COLOR_BUFFER_SIZE = 12 * 1024
+    _SHADER_MIN_SOFTNESS = 0.0005
+    _SHADER_GLOW_FALLOFF = 10.0
+    _SHADER_GLOW_INTENSITY = 0.35
+    _SHADER_SHADOW_OFFSET = 2.0
+    _SHADER_SHADOW_FALLOFF = 12.0
+    _SHADER_SHADOW_INTENSITY = 0.2
+    _SHADER_BORDER_BRIGHTNESS = 0.85
+    _SHADER_GLOW_CONTRIBUTION = 0.4
+    _SHADER_SHADOW_CONTRIBUTION = 0.2
+    _SHADER_GLOW_ALPHA_CONTRIBUTION = 0.75
+    _SHADER_ALPHA_DISCARD_THRESHOLD = 0.01
     _INSTANCE_DATA_COLUMNS = (
         NeuralWorld._ROW_X,
         NeuralWorld._ROW_Y,
@@ -789,8 +803,19 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     v_params = in_params;
                 }
             """,
-            fragment_shader="""
+            fragment_shader=f"""
                 #version 330
+                const float MIN_SOFTNESS = {self._SHADER_MIN_SOFTNESS};
+                const float GLOW_FALLOFF = {self._SHADER_GLOW_FALLOFF};
+                const float GLOW_INTENSITY = {self._SHADER_GLOW_INTENSITY};
+                const float SHADOW_OFFSET = {self._SHADER_SHADOW_OFFSET};
+                const float SHADOW_FALLOFF = {self._SHADER_SHADOW_FALLOFF};
+                const float SHADOW_INTENSITY = {self._SHADER_SHADOW_INTENSITY};
+                const float BORDER_BRIGHTNESS = {self._SHADER_BORDER_BRIGHTNESS};
+                const float GLOW_CONTRIBUTION = {self._SHADER_GLOW_CONTRIBUTION};
+                const float SHADOW_CONTRIBUTION = {self._SHADER_SHADOW_CONTRIBUTION};
+                const float GLOW_ALPHA_CONTRIBUTION = {self._SHADER_GLOW_ALPHA_CONTRIBUTION};
+                const float ALPHA_DISCARD_THRESHOLD = {self._SHADER_ALPHA_DISCARD_THRESHOLD};
                 in vec3 v_color;
                 in vec2 v_local_pos;
                 in vec2 v_half_size;
@@ -805,10 +830,10 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 void main() {
                     float cornerRadius = clamp(v_params.x, 0.0, min(v_half_size.x, v_half_size.y));
                     float borderThickness = max(v_params.y, 0.0);
-                    float softness = max(v_params.z, 0.0005);
+                    float softness = max(v_params.z, MIN_SOFTNESS);
                     float sdf = roundedBoxSdf(v_local_pos, v_half_size, cornerRadius);
 
-                    vec2 innerHalfSize = max(v_half_size - vec2(borderThickness), vec2(0.0005));
+                    vec2 innerHalfSize = max(v_half_size - vec2(borderThickness), vec2(MIN_SOFTNESS));
                     float innerRadius = clamp(cornerRadius - borderThickness, 0.0, min(innerHalfSize.x, innerHalfSize.y));
                     float innerSdf = roundedBoxSdf(v_local_pos, innerHalfSize, innerRadius);
 
@@ -816,12 +841,14 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     float innerAlpha = 1.0 - smoothstep(0.0, softness, innerSdf);
                     float borderAlpha = clamp(fillAlpha - innerAlpha, 0.0, 1.0);
 
-                    float glow = exp(-max(sdf, 0.0) / (softness * 10.0)) * 0.35;
-                    float shadow = exp(-max(sdf + softness * 2.0, 0.0) / (softness * 12.0)) * 0.2;
+                    float glow = exp(-max(sdf, 0.0) / (softness * GLOW_FALLOFF)) * GLOW_INTENSITY;
+                    float shadow = exp(-max(sdf + softness * SHADOW_OFFSET, 0.0) / (softness * SHADOW_FALLOFF)) * SHADOW_INTENSITY;
 
-                    vec3 color = v_color * (innerAlpha + borderAlpha * 0.85) + v_color * glow * 0.4 - vec3(shadow * 0.2);
-                    float alpha = max(fillAlpha, glow * 0.75);
-                    if (alpha < 0.01) {
+                    vec3 color = v_color * (innerAlpha + borderAlpha * BORDER_BRIGHTNESS)
+                        + v_color * glow * GLOW_CONTRIBUTION
+                        - vec3(shadow * SHADOW_CONTRIBUTION);
+                    float alpha = max(fillAlpha, glow * GLOW_ALPHA_CONTRIBUTION);
+                    if (alpha < ALPHA_DISCARD_THRESHOLD) {
                         discard;
                     }
                     fragColor = vec4(color, clamp(alpha, 0.0, 1.0));
