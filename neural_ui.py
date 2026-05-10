@@ -54,7 +54,12 @@ class Object:
     state: ObjectState = ObjectState.ACTIVE
     on_hover: Optional[Callable[["Object"], None]] = None
     on_click: Optional[Callable[["Object"], None]] = None
+    costumes: Sequence[str] = field(default_factory=tuple)
+    spritesheet: Optional[str] = None
+    grid: Optional[Tuple[int, int]] = None
+    fps: float = 0.0
     tensor_index: Optional[int] = None
+    _texture_layers: Optional[List[int]] = field(default=None, init=False, repr=False, compare=False)
     _world: Optional["NeuralWorld"] = field(default=None, init=False, repr=False, compare=False)
     _suspend_world_sync: bool = field(default=False, init=False, repr=False, compare=False)
 
@@ -101,11 +106,7 @@ class ObjectGroup(Object):
 
 @dataclass
 class SpriteObject(Object):
-    costumes: Sequence[str] = field(default_factory=tuple)
-    spritesheet: Optional[str] = None
-    grid: Optional[Tuple[int, int]] = None
-    fps: float = 0.0
-    _texture_layers: Optional[List[int]] = field(default=None, init=False, repr=False, compare=False)
+    pass
 
 
 class NeuralWorld:
@@ -1201,18 +1202,20 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         if self._texture_manager is None:
             return
         for obj in self.world._objects:
-            if not isinstance(obj, SpriteObject):
-                continue
             if obj.tensor_index is None:
+                continue
+            has_spritesheet = obj.spritesheet is not None and obj.grid is not None
+            has_costumes = bool(obj.costumes)
+            if not has_spritesheet and not has_costumes:
                 continue
             object_key = id(obj)
             if self._sprite_configured.get(object_key):
                 continue
             layer_ids: List[int]
-            if obj.spritesheet is not None and obj.grid is not None:
+            if has_spritesheet:
                 cols, rows = obj.grid
                 layer_ids = self._texture_manager.register_spritesheet(obj.spritesheet, cols, rows)
-            elif obj.costumes:
+            elif has_costumes:
                 layer_ids = self._texture_manager.register_images(obj.costumes)
             else:
                 layer_ids = []

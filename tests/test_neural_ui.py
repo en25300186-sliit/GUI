@@ -265,6 +265,36 @@ class NeuralWorldTests(unittest.TestCase):
         world.update(1.0)
         self.assertEqual(world.global_row(idx)[NeuralWorld._ROW_COSTUME_ID], 10.0)
 
+    def test_plain_object_with_costumes_gets_texture_layers(self):
+        class FakeTextureManager:
+            layer_count = 2
+
+            def register_images(self, image_paths):
+                return [7, 8]
+
+            def register_spritesheet(self, image_path, cols, rows):
+                return [0]
+
+            def bind(self, location=0):
+                return None
+
+        world = NeuralWorld(use_cupy=False)
+        obj = Object(x=0.0, y=0.0, width=1.0, height=1.0, costumes=["frame0.png", "frame1.png"], fps=4.0)
+        idx = world.register(obj)
+        class FakeRenderer:
+            def __init__(self):
+                self.world = world
+                self._texture_manager = FakeTextureManager()
+                self._sprite_configured = {}
+
+        renderer = FakeRenderer()
+        from neural_ui import InstancedModernGLRenderer
+
+        InstancedModernGLRenderer._sync_sprite_costumes(renderer)
+
+        self.assertEqual(obj._texture_layers, [7, 8])
+        self.assertEqual(world.global_row(idx)[NeuralWorld._ROW_COSTUME_ID], 7.0)
+
 
 if __name__ == "__main__":
     unittest.main()
