@@ -71,6 +71,31 @@ class NeuralWorldTests(unittest.TestCase):
         self.assertIsNotNone(nested.tensor_index)
         self.assertIsNotNone(child.tensor_index)
 
+    def test_preallocated_tensor_grows_in_chunks(self):
+        world = NeuralWorld(use_cupy=False, initial_capacity=2, growth_chunk=2)
+        world.register(Object(x=0, y=0, width=1, height=1, on_hover=lambda _: None))
+        world.register(Object(x=1, y=1, width=1, height=1, on_hover=lambda _: None))
+        world.register(Object(x=2, y=2, width=1, height=1, on_hover=lambda _: None))
+
+        self.assertEqual(world.size, 3)
+        if world.backend == "python":
+            self.assertEqual(world.capacity, 3)
+            self.assertEqual(len(world.world_tensor), 3)
+        else:
+            self.assertEqual(world.capacity, 4)
+            self.assertEqual(int(world.world_tensor.shape[0]), 4)
+
+    def test_hierarchy_updates_global_transform(self):
+        world = NeuralWorld(use_cupy=False)
+        child = Object(x=0.5, y=-0.5, width=1, height=1, z=2, on_hover=lambda _: None)
+        parent = ObjectGroup(child, x=1.0, y=2.0, width=1, height=1, z=3, on_hover=lambda _: None)
+        world.register(parent)
+
+        row = world.global_row(child.tensor_index)
+        self.assertAlmostEqual(row[0], 1.5)
+        self.assertAlmostEqual(row[1], 1.5)
+        self.assertAlmostEqual(row[4], 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()
