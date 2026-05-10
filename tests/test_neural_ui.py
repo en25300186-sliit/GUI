@@ -182,6 +182,51 @@ class NeuralWorldTests(unittest.TestCase):
         self.assertEqual(int(row_active[NeuralWorld._ROW_STATE]), int(ObjectState.OUTOFSCREEN))
         self.assertEqual(int(row_hidden[NeuralWorld._ROW_STATE]), int(ObjectState.HIDDEN))
 
+    def test_update_applies_friction_damping(self):
+        world = NeuralWorld(use_cupy=False, friction_coefficient=0.5)
+        idx = world.register(Object(x=0.0, y=0.0, width=1, height=1, on_hover=lambda _: None))
+
+        if world.backend == "python":
+            world.velocity_tensor[idx][NeuralWorld._ROW_X] = 2.0
+        else:
+            world.velocity_tensor[idx, NeuralWorld._ROW_X] = 2.0
+
+        world.update(1.0)
+        if world.backend == "python":
+            new_velocity_x = world.velocity_tensor[idx][NeuralWorld._ROW_X]
+        else:
+            new_velocity_x = float(world.velocity_tensor[idx, NeuralWorld._ROW_X])
+        self.assertAlmostEqual(new_velocity_x, 1.0)
+
+    def test_update_reactivates_outofscreen_when_back_inside_reactivation_bounds(self):
+        world = NeuralWorld(use_cupy=False)
+        idx = world.register(Object(x=0.0, y=0.0, width=1, height=1, state=ObjectState.OUTOFSCREEN, on_hover=lambda _: None))
+        world.set_local_position(idx, 0.5, -0.5)
+
+        world.update(0.016)
+        row = world.global_row(idx)
+        self.assertEqual(int(row[NeuralWorld._ROW_STATE]), int(ObjectState.ACTIVE))
+
+    def test_set_color_updates_persistent_color_tensor(self):
+        world = NeuralWorld(use_cupy=False)
+        idx = world.register(Object(x=0.0, y=0.0, width=1, height=1, on_hover=lambda _: None))
+        world.set_color(idx, (0.1, 0.2, 0.3))
+
+        if world.backend == "python":
+            color = world.color_tensor[idx]
+        else:
+            color = world.color_tensor[idx].tolist()
+        self.assertEqual(color, [0.1, 0.2, 0.3])
+
+    def test_object_view_syncs_x_setter_back_to_world(self):
+        world = NeuralWorld(use_cupy=False)
+        obj = Object(x=0.0, y=0.0, width=1, height=1, on_hover=lambda _: None)
+        index = world.register(obj)
+
+        obj.x = 10.0
+        row = world.global_row(index)
+        self.assertAlmostEqual(row[NeuralWorld._ROW_X], 10.0)
+
 
 if __name__ == "__main__":
     unittest.main()
