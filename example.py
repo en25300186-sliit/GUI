@@ -21,9 +21,9 @@ def main() -> None:
     world = nui.NeuralWorld(use_cupy=nui.cp is not None, initial_capacity=5000, growth_chunk=2000)
 
     ship = nui.ObjectGroup(x=0.0, y=0.0, width=0.08, height=0.08, z=2.0)
-    drone_count = 200
-    for i in range(drone_count):
-        angle = (i / drone_count) * (2.0 * math.pi)
+    satellite_count = 200
+    for i in range(satellite_count):
+        angle = (i / satellite_count) * (2.0 * math.pi)
         ship.add(
             nui.Object(
                 x=math.sin(angle) * 0.2,

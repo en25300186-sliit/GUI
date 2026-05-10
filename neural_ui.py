@@ -517,6 +517,9 @@ class ModernGLRenderer:
 class InstancedModernGLRenderer(ModernGLRenderer):
     """ModernGL renderer that uses instanced quads for better batching efficiency."""
 
+    _INITIAL_INSTANCE_DATA_BUFFER_SIZE = 16 * 1024
+    _INITIAL_INSTANCE_COLOR_BUFFER_SIZE = 12 * 1024
+
     def __init__(self, *args, random_object_colors: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.random_object_colors = random_object_colors
@@ -527,7 +530,8 @@ class InstancedModernGLRenderer(ModernGLRenderer):
     @staticmethod
     def _index_color(index: int) -> Tuple[float, float, float]:
         """Generate a deterministic bright color from an object index."""
-        # LCG constants keep color generation deterministic without storing per-object color arrays.
+        # Linear Congruential Generator constants keep color generation deterministic
+        # without storing separate per-object color arrays.
         seed = (index * 1664525 + 1013904223) & 0xFFFFFFFF
         r = 0.35 + (((seed >> 0) & 0xFF) / 255.0) * 0.65
         g = 0.35 + (((seed >> 8) & 0xFF) / 255.0) * 0.65
@@ -614,8 +618,8 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         )
         quad = array("f", (-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0))
         self._quad_vbo = self._ctx.buffer(quad.tobytes())
-        self._instance_data_vbo = self._ctx.buffer(reserve=16 * 1024)
-        self._instance_color_vbo = self._ctx.buffer(reserve=12 * 1024)
+        self._instance_data_vbo = self._ctx.buffer(reserve=self._INITIAL_INSTANCE_DATA_BUFFER_SIZE)
+        self._instance_color_vbo = self._ctx.buffer(reserve=self._INITIAL_INSTANCE_COLOR_BUFFER_SIZE)
         self._vao = self._ctx.vertex_array(
             self._program,
             [
