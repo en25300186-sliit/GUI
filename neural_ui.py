@@ -173,7 +173,7 @@ class NeuralWorld:
                 self._python_global_rows[idx] = row[:]
                 parent_idx = self._python_parent_index[idx]
                 if parent_idx < -1 or parent_idx >= object_count:
-                    raise ValueError("Parent index is out of bounds")
+                    raise ValueError(f"Parent index {parent_idx} for object {idx} is out of bounds")
 
             resolved = [parent_idx == -1 for parent_idx in self._python_parent_index]
             remaining = object_count - sum(resolved)
@@ -208,7 +208,10 @@ class NeuralWorld:
         active_parent = self._parent_index[: self._size]
         invalid_parent = (active_parent < -1) | (active_parent >= self._size)
         if bool(self._to_scalar(invalid_parent.any())):
-            raise ValueError("Parent index is out of bounds")
+            invalid_indices = self.xp.where(invalid_parent)[0]
+            bad_index = int(self._to_scalar(invalid_indices[0]))
+            bad_parent = int(self._to_scalar(active_parent[bad_index]))
+            raise ValueError(f"Parent index {bad_parent} for object {bad_index} is out of bounds")
 
         resolved = active_parent == -1
         remaining = self._size - int(self._to_scalar(resolved.sum()))
@@ -466,7 +469,7 @@ class ModernGLRenderer:
                 }
             """,
         )
-        self._vbo = self._ctx.buffer(reserve=4)
+        self._vbo = self._ctx.buffer(reserve=8192)
         self._vao = self._ctx.simple_vertex_array(self._program, self._vbo, "in_pos", "in_color")
         return self.window
 

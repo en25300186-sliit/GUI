@@ -113,6 +113,7 @@ class NeuralWorldTests(unittest.TestCase):
         first = world.register(Object(x=0, y=0, width=1, height=1, on_hover=lambda _: None))
         second = world.register(Object(x=1, y=1, width=1, height=1, on_hover=lambda _: None), first)
 
+        # Cycles cannot be created through register(); force one to verify runtime validation.
         if world.backend == "python":
             world._python_parent_index[first] = second
         else:
