@@ -85,20 +85,16 @@ def main() -> None:
         vsync=True,
     )
 
-    # Open the window so we can set up textures and key callback before rendering.
+    # Open the window so we can set up key callback before rendering.
     renderer.create_window()
-    renderer._sync_sprite_costumes()
 
     # Start in idle-down pose (first frame of the down row, fps=0 → no auto-advance).
     current_direction = DIR_DOWN
     is_moving = False
-    if not player._texture_layers:
-        raise RuntimeError("Player spritesheet failed to load into texture layers")
-
     def row_layers(direction: int):
-        """Return the layer-ID slice for the given direction row."""
+        """Return contiguous layer IDs for the given direction row."""
         start = direction * SPRITE_COLS
-        return player._texture_layers[start : start + SPRITE_COLS]
+        return list(range(start, start + SPRITE_COLS))
 
     world.configure_sprite_animation(player_index, row_layers(DIR_DOWN), 0.0)
 
