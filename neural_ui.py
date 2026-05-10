@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from array import array
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -14,14 +15,15 @@ try:
 except ImportError:  # pragma: no cover - fallback for environments without NumPy
     np = None
 
-try:  # pragma: no cover - only exercised on Windows with pywin32 installed
-    import win32api
-    import win32con
-    import win32gui
-except ImportError:  # pragma: no cover - fallback for environments without pywin32
-    win32api = None
-    win32con = None
-    win32gui = None
+try:  # pragma: no cover - optional dependency for shader rendering
+    import glfw
+except ImportError:  # pragma: no cover - fallback for environments without GLFW
+    glfw = None
+
+try:  # pragma: no cover - optional dependency for shader rendering
+    import moderngl
+except ImportError:  # pragma: no cover - fallback for environments without ModernGL
+    moderngl = None
 
 
 class ObjectState(IntEnum):
@@ -162,30 +164,40 @@ class NeuralWorld:
             return
 
         if self.backend == "python":
-            state = [0] * len(self.world_tensor)
+            object_count = len(self.world_tensor)
+            if object_count == 0:
+                self._global_dirty = False
+                return
 
-            def _resolve(index: int) -> None:
-                if state[index] == 2:
-                    return
-                if state[index] == 1:
+            for idx, row in enumerate(self.world_tensor):
+                self._python_global_rows[idx] = row[:]
+                parent_idx = self._python_parent_index[idx]
+                if parent_idx < -1:
+                    raise ValueError(f"Parent index {parent_idx} for object {idx} is invalid (must be >= -1)")
+                if parent_idx >= object_count:
+                    raise ValueError(f"Parent index {parent_idx} for object {idx} is out of bounds")
+
+            resolved = [parent_idx == -1 for parent_idx in self._python_parent_index]
+            remaining = object_count - sum(resolved)
+            while remaining > 0:
+                progressed = False
+                for idx in range(object_count):
+                    if resolved[idx]:
+                        continue
+                    parent_idx = self._python_parent_index[idx]
+                    if parent_idx >= 0 and resolved[parent_idx]:
+                        local_row = self.world_tensor[idx]
+                        parent_global = self._python_global_rows[parent_idx]
+                        global_row = local_row[:]
+                        global_row[self._ROW_X] = local_row[self._ROW_X] + parent_global[self._ROW_X]
+                        global_row[self._ROW_Y] = local_row[self._ROW_Y] + parent_global[self._ROW_Y]
+                        global_row[self._ROW_Z] = local_row[self._ROW_Z] + parent_global[self._ROW_Z]
+                        self._python_global_rows[idx] = global_row
+                        resolved[idx] = True
+                        remaining -= 1
+                        progressed = True
+                if not progressed:
                     raise ValueError("Hierarchy cycle detected")
-                state[index] = 1
-                local_row = self.world_tensor[index]
-                parent_idx = self._python_parent_index[index]
-                global_row = local_row[:]
-                if parent_idx >= 0:
-                    if parent_idx >= len(self.world_tensor):
-                        raise ValueError("Parent index is out of bounds")
-                    _resolve(parent_idx)
-                    parent_global = self._python_global_rows[parent_idx]
-                    global_row[self._ROW_X] = local_row[self._ROW_X] + parent_global[self._ROW_X]
-                    global_row[self._ROW_Y] = local_row[self._ROW_Y] + parent_global[self._ROW_Y]
-                    global_row[self._ROW_Z] = local_row[self._ROW_Z] + parent_global[self._ROW_Z]
-                self._python_global_rows[index] = global_row
-                state[index] = 2
-
-            for idx in range(len(self.world_tensor)):
-                _resolve(idx)
             self._global_dirty = False
             return
 
@@ -195,26 +207,36 @@ class NeuralWorld:
         active_local = self.world_tensor[: self._size]
         active_global = self._global_tensor[: self._size]
         active_global[:, :] = active_local
-        state = [0] * self._size
+        active_parent = self._parent_index[: self._size]
+        invalid_parent = (active_parent < -1) | (active_parent >= self._size)
+        if bool(self._to_scalar(invalid_parent.any())):
+            invalid_indices = self.xp.where(invalid_parent)[0]
+            bad_index = int(self._to_scalar(invalid_indices[0]))
+            bad_parent = int(self._to_scalar(active_parent[bad_index]))
+            raise ValueError(f"Parent index {bad_parent} for object {bad_index} is out of bounds")
 
-        def _resolve(index: int) -> None:
-            if state[index] == 2:
-                return
-            if state[index] == 1:
+        resolved = active_parent == -1
+        remaining = self._size - int(self._to_scalar(resolved.sum()))
+        while remaining > 0:
+            unresolved_indices = self.xp.where(~resolved)[0]
+            unresolved_parents = active_parent[unresolved_indices]
+            ready_mask = resolved[unresolved_parents]
+            ready_indices = unresolved_indices[ready_mask]
+            ready_count = int(self._to_scalar(ready_indices.size))
+            if ready_count == 0:
                 raise ValueError("Hierarchy cycle detected")
-            state[index] = 1
-            parent_idx = int(self._to_scalar(self._parent_index[index]))
-            if parent_idx >= 0:
-                if parent_idx >= self._size:
-                    raise ValueError("Parent index is out of bounds")
-                _resolve(parent_idx)
-                active_global[index, self._ROW_X] = active_local[index, self._ROW_X] + active_global[parent_idx, self._ROW_X]
-                active_global[index, self._ROW_Y] = active_local[index, self._ROW_Y] + active_global[parent_idx, self._ROW_Y]
-                active_global[index, self._ROW_Z] = active_local[index, self._ROW_Z] + active_global[parent_idx, self._ROW_Z]
-            state[index] = 2
-
-        for idx in range(self._size):
-            _resolve(idx)
+            parent_indices = active_parent[ready_indices]
+            active_global[ready_indices, self._ROW_X] = (
+                active_local[ready_indices, self._ROW_X] + active_global[parent_indices, self._ROW_X]
+            )
+            active_global[ready_indices, self._ROW_Y] = (
+                active_local[ready_indices, self._ROW_Y] + active_global[parent_indices, self._ROW_Y]
+            )
+            active_global[ready_indices, self._ROW_Z] = (
+                active_local[ready_indices, self._ROW_Z] + active_global[parent_indices, self._ROW_Z]
+            )
+            resolved[ready_indices] = True
+            remaining -= ready_count
         self._global_dirty = False
 
     def global_row(self, index: int) -> Optional[Sequence[float]]:
@@ -333,7 +355,12 @@ class NeuralWorld:
         return None
 
 
-class Win32Renderer:
+class ModernGLRenderer:
+    _VERTEX_FLOATS = 5
+    _FLOAT_SIZE_BYTES = 4
+    _VERTEX_STRIDE_BYTES = _VERTEX_FLOATS * _FLOAT_SIZE_BYTES
+    _INITIAL_VBO_SIZE_BYTES = 8192
+
     def __init__(
         self,
         world: NeuralWorld,
@@ -344,48 +371,51 @@ class Win32Renderer:
         background_color: int = 0x202020,
         object_color: int = 0x4080FF,
         hover_color: int = 0x40D880,
+        vsync: bool = True,
     ) -> None:
-        if win32gui is None or win32con is None or win32api is None:
-            raise RuntimeError("pywin32 is required to use Win32Renderer")
+        if moderngl is None or glfw is None:
+            raise RuntimeError("ModernGLRenderer requires both moderngl and glfw")
         self.world = world
         self.title = title
         self.width = width
         self.height = height
-        self.background_color = background_color
-        self.object_color = object_color
-        self.hover_color = hover_color
-        self._class_name = f"NeuralUIWindowClass_{id(self)}"
-        self._wnd_proc = self._build_wnd_proc()
-        self.hwnd: Optional[int] = None
+        self.background_color = self._int_to_rgb(background_color)
+        self.object_color = self._int_to_rgb(object_color)
+        self.hover_color = self._int_to_rgb(hover_color)
+        self.vsync = vsync
+        self.window = None
+        self._ctx = None
+        self._program = None
+        self._vbo = None
+        self._vao = None
+        self._left_down = False
 
     @staticmethod
-    def world_to_screen(
+    def _int_to_rgb(value: int) -> Tuple[float, float, float]:
+        return (
+            ((value >> 16) & 0xFF) / 255.0,
+            ((value >> 8) & 0xFF) / 255.0,
+            (value & 0xFF) / 255.0,
+        )
+
+    @staticmethod
+    def world_to_ndc(
         x_world: float, y_world: float, width_px: int, height_px: int, half_w_world: float, half_h_world: float
-    ) -> Tuple[int, int, int, int]:
+    ) -> Tuple[float, float, float, float]:
         aspect = width_px / height_px
         left_ndc = (x_world - half_w_world) / aspect
         right_ndc = (x_world + half_w_world) / aspect
         top_ndc = y_world + half_h_world
         bottom_ndc = y_world - half_h_world
-        left = int((left_ndc + 1.0) * 0.5 * width_px)
-        right = int((right_ndc + 1.0) * 0.5 * width_px)
-        top = int((1.0 - (top_ndc + 1.0) * 0.5) * height_px)
-        bottom = int((1.0 - (bottom_ndc + 1.0) * 0.5) * height_px)
-        return left, top, right, bottom
+        return left_ndc, top_ndc, right_ndc, bottom_ndc
 
-    def _draw_world(self, hdc: int) -> None:
-        rect = win32gui.GetClientRect(self.hwnd)
-        bg_brush = win32gui.CreateSolidBrush(self.background_color)
-        win32gui.FillRect(hdc, rect, bg_brush)
-        win32gui.DeleteObject(bg_brush)
-
+    def _build_vertices(self) -> bytes:
+        vertices = array("f")
         for obj, row in self.world.iter_render_rows():
             if row[NeuralWorld._ROW_STATE] != float(ObjectState.ACTIVE):
                 continue
             color = self.hover_color if obj.tensor_index == self.world._last_hover_index else self.object_color
-            brush = win32gui.CreateSolidBrush(color)
-            old_brush = win32gui.SelectObject(hdc, brush)
-            left, top, right, bottom = self.world_to_screen(
+            left, top, right, bottom = self.world_to_ndc(
                 row[NeuralWorld._ROW_X],
                 row[NeuralWorld._ROW_Y],
                 self.width,
@@ -393,64 +423,89 @@ class Win32Renderer:
                 row[NeuralWorld._ROW_HALF_W],
                 row[NeuralWorld._ROW_HALF_H],
             )
-            win32gui.Rectangle(hdc, left, top, right, bottom)
-            win32gui.SelectObject(hdc, old_brush)
-            win32gui.DeleteObject(brush)
+            r, g, b = color
+            vertices.extend((left, top, r, g, b))
+            vertices.extend((right, top, r, g, b))
+            vertices.extend((right, bottom, r, g, b))
+            vertices.extend((left, top, r, g, b))
+            vertices.extend((right, bottom, r, g, b))
+            vertices.extend((left, bottom, r, g, b))
+        return vertices.tobytes()
 
-    def _build_wnd_proc(self):
-        def _wnd_proc(hwnd, msg, wparam, lparam):
-            if msg == win32con.WM_MOUSEMOVE:
-                x, y = win32gui.ScreenToClient(hwnd, win32api.GetCursorPos())
-                self.world.win_proc("mouse_move", x, y, self.width, self.height)
-                win32gui.InvalidateRect(hwnd, None, False)
-                return 0
-            if msg == win32con.WM_LBUTTONDOWN:
-                x, y = win32gui.ScreenToClient(hwnd, win32api.GetCursorPos())
-                self.world.win_proc("mouse_click", x, y, self.width, self.height)
-                win32gui.InvalidateRect(hwnd, None, False)
-                return 0
-            if msg == win32con.WM_PAINT:
-                hdc, paint_struct = win32gui.BeginPaint(hwnd)
-                self._draw_world(hdc)
-                win32gui.EndPaint(hwnd, paint_struct)
-                return 0
-            if msg == win32con.WM_DESTROY:
-                win32gui.PostQuitMessage(0)
-                return 0
-            return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+    def _draw_world(self) -> None:
+        self._ctx.clear(*self.background_color, 1.0)
+        payload = self._build_vertices()
+        if not payload:
+            return
+        if len(payload) > self._vbo.size:
+            self._vbo.orphan(len(payload))
+        self._vbo.write(payload)
+        self._vao.render(moderngl.TRIANGLES, vertices=len(payload) // self._VERTEX_STRIDE_BYTES)
 
-        return _wnd_proc
+    def create_window(self):
+        if not glfw.init():
+            raise RuntimeError("Failed to initialize GLFW")
+        glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
+        glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
+        glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+        self.window = glfw.create_window(self.width, self.height, self.title, None, None)
+        if self.window is None:
+            glfw.terminate()
+            raise RuntimeError("Failed to create GLFW window")
+        glfw.make_context_current(self.window)
+        glfw.swap_interval(1 if self.vsync else 0)
 
-    def create_window(self) -> int:
-        h_instance = win32api.GetModuleHandle(None)
-        wnd_class = win32gui.WNDCLASS()
-        wnd_class.hInstance = h_instance
-        wnd_class.lpszClassName = self._class_name
-        wnd_class.lpfnWndProc = self._wnd_proc
-        wnd_class.hCursor = win32gui.LoadCursor(0, win32con.IDC_ARROW)
-        wnd_class.hbrBackground = win32con.COLOR_WINDOW + 1
-        win32gui.RegisterClass(wnd_class)
-
-        style = win32con.WS_OVERLAPPEDWINDOW | win32con.WS_VISIBLE
-        self.hwnd = win32gui.CreateWindowEx(
-            0,
-            self._class_name,
-            self.title,
-            style,
-            win32con.CW_USEDEFAULT,
-            win32con.CW_USEDEFAULT,
-            self.width,
-            self.height,
-            0,
-            0,
-            h_instance,
-            None,
+        self._ctx = moderngl.create_context()
+        self._program = self._ctx.program(
+            vertex_shader="""
+                #version 330
+                in vec2 in_pos;
+                in vec3 in_color;
+                out vec3 v_color;
+                void main() {
+                    gl_Position = vec4(in_pos, 0.0, 1.0);
+                    v_color = in_color;
+                }
+            """,
+            fragment_shader="""
+                #version 330
+                in vec3 v_color;
+                out vec4 fragColor;
+                void main() {
+                    fragColor = vec4(v_color, 1.0);
+                }
+            """,
         )
-        win32gui.ShowWindow(self.hwnd, win32con.SW_SHOW)
-        win32gui.UpdateWindow(self.hwnd)
-        return self.hwnd
+        self._vbo = self._ctx.buffer(reserve=self._INITIAL_VBO_SIZE_BYTES)
+        self._vao = self._ctx.simple_vertex_array(self._program, self._vbo, "in_pos", "in_color")
+        return self.window
 
     def run(self) -> None:
-        if self.hwnd is None:
+        if self.window is None:
             self.create_window()
-        win32gui.PumpMessages()
+        try:
+            while not glfw.window_should_close(self.window):
+                mouse_x_px, mouse_y_px = glfw.get_cursor_pos(self.window)
+                self.world.win_proc("mouse_move", mouse_x_px, mouse_y_px, self.width, self.height)
+
+                left_pressed = glfw.get_mouse_button(self.window, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
+                if left_pressed and not self._left_down:
+                    self.world.win_proc("mouse_click", mouse_x_px, mouse_y_px, self.width, self.height)
+                self._left_down = left_pressed
+
+                self._draw_world()
+                glfw.swap_buffers(self.window)
+                glfw.poll_events()
+        finally:
+            if self.window is not None:
+                glfw.destroy_window(self.window)
+                self.window = None
+            glfw.terminate()
+
+
+class Win32Renderer(ModernGLRenderer):
+    def __init__(self, *args, **kwargs) -> None:
+        raise RuntimeError(
+            "Win32Renderer has been replaced by ModernGLRenderer. "
+            "Instantiate ModernGLRenderer directly to use shader-based rendering."
+        )
