@@ -102,6 +102,8 @@ class ObjectGroup(Object):
 @dataclass
 class SpriteObject(Object):
     costumes: Sequence[str] = field(default_factory=tuple)
+    spritesheet: Optional[str] = None
+    grid: Optional[Tuple[int, int]] = None
     fps: float = 0.0
     _texture_layers: Optional[List[int]] = field(default=None, init=False, repr=False, compare=False)
 
@@ -705,6 +707,47 @@ class TextureManager:
     def register_images(self, image_paths: Sequence[str]) -> List[int]:
         return [self.register_image(path) for path in image_paths]
 
+    def register_spritesheet(self, image_path: str, cols: int, rows: int) -> List[int]:
+        if cols <= 0 or rows <= 0:
+            raise ValueError("Spritesheet grid dimensions must be positive")
+        normalized_path = str(Path(image_path).expanduser().resolve())
+        try:
+            pixels = self._load_rgba_pixels(normalized_path)
+        except Exception as exc:
+            raise ValueError(f"Failed to register spritesheet image: {image_path}") from exc
+        height, width = int(pixels.shape[0]), int(pixels.shape[1])
+        frame_w = width // int(cols)
+        frame_h = height // int(rows)
+        if frame_w <= 0 or frame_h <= 0:
+            raise ValueError(
+                f"Invalid spritesheet grid {cols}x{rows} for image size {width}x{height}: frame size must be positive"
+            )
+        if width % int(cols) != 0 or height % int(rows) != 0:
+            raise ValueError(
+                f"Spritesheet {normalized_path} size {width}x{height} is not evenly divisible by grid {cols}x{rows}"
+            )
+        if self._width is None or self._height is None:
+            self._width = frame_w
+            self._height = frame_h
+        elif frame_w != self._width or frame_h != self._height:
+            raise ValueError(
+                f"Spritesheet frames from {normalized_path} are {frame_w}x{frame_h}, expected {self._width}x{self._height} for array packing"
+            )
+
+        layer_ids: List[int] = []
+        for row in range(int(rows)):
+            for col in range(int(cols)):
+                y0 = row * frame_h
+                y1 = y0 + frame_h
+                x0 = col * frame_w
+                x1 = x0 + frame_w
+                frame_pixels = np.ascontiguousarray(pixels[y0:y1, x0:x1, :])
+                layer_id = len(self._layer_pixels)
+                self._layer_pixels.append(frame_pixels)
+                layer_ids.append(layer_id)
+        self._dirty = True
+        return layer_ids
+
     def texture_array(self):
         self._ensure_uploaded()
         return self._texture_array
@@ -750,7 +793,7 @@ class TextureManager:
             data=stacked_pixels.tobytes(),
             dtype="u1",
         )
-        self._texture_array.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._texture_array.filter = (moderngl.NEAREST, moderngl.NEAREST)
         self._texture_array.repeat_x = False
         self._texture_array.repeat_y = False
         self._dirty = False
@@ -996,6 +1039,8 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         glfw.swap_interval(1 if self.vsync else 0)
 
         self._ctx = moderngl.create_context()
+        self._ctx.enable(moderngl.BLEND)
+        self._ctx.blend_func = (moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA)
         self._texture_manager = TextureManager(self._ctx)
         self._program = self._ctx.program(
             vertex_shader="""
@@ -1060,6 +1105,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     if (v_costume_id >= 0.0) {
                         // Map local quad coordinates from [-half_size, +half_size] into [0, 1] UV space.
                         vec2 uv = (v_local_pos / (v_half_size * 2.0)) + vec2(0.5);
+                        uv.y = 1.0 - uv.y;
                         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
                             discard;
                         }
@@ -1134,7 +1180,14 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             object_key = id(obj)
             if self._sprite_configured.get(object_key):
                 continue
-            layer_ids = self._texture_manager.register_images(obj.costumes)
+            layer_ids: List[int]
+            if obj.spritesheet is not None and obj.grid is not None:
+                cols, rows = obj.grid
+                layer_ids = self._texture_manager.register_spritesheet(obj.spritesheet, int(cols), int(rows))
+            elif obj.costumes:
+                layer_ids = self._texture_manager.register_images(obj.costumes)
+            else:
+                layer_ids = []
             obj._texture_layers = layer_ids
             self.world.configure_sprite_animation(obj.tensor_index, layer_ids, obj.fps)
             self._sprite_configured[object_key] = True
