@@ -276,7 +276,7 @@ class NeuralWorldTests(unittest.TestCase):
                 return [0]
 
             def bind(self, location=0):
-                return None
+                pass
 
         world = NeuralWorld(use_cupy=False)
         obj = Object(x=0.0, y=0.0, width=1.0, height=1.0, costumes=["frame0.png", "frame1.png"], fps=4.0)
