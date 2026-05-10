@@ -159,6 +159,17 @@ class NeuralWorld:
         self._global_dirty = True
         return index
 
+    def set_local_position(self, index: int, x: float, y: float) -> None:
+        if index < 0 or index >= self.size:
+            raise IndexError("Object index out of bounds")
+        if self.backend == "python":
+            self.world_tensor[index][self._ROW_X] = float(x)
+            self.world_tensor[index][self._ROW_Y] = float(y)
+        else:
+            self.world_tensor[index, self._ROW_X] = float(x)
+            self.world_tensor[index, self._ROW_Y] = float(y)
+        self._global_dirty = True
+
     def _sync_global_transforms(self) -> None:
         if not self._global_dirty:
             return
@@ -516,6 +527,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
     @staticmethod
     def _index_color(index: int) -> Tuple[float, float, float]:
         """Generate a deterministic bright color from an object index."""
+        # LCG constants keep color generation deterministic without storing per-object color arrays.
         seed = (index * 1664525 + 1013904223) & 0xFFFFFFFF
         r = 0.35 + (((seed >> 0) & 0xFF) / 255.0) * 0.65
         g = 0.35 + (((seed >> 8) & 0xFF) / 255.0) * 0.65

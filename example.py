@@ -11,17 +11,6 @@ TIME_STEP = 0.02
 SLEEP_SECONDS = 0.01
 
 
-def _set_object_xy(world: nui.NeuralWorld, index: int, x: float, y: float) -> None:
-    """Update a registered object's local XY directly in the active backend tensor."""
-    if world.backend == "python":
-        world.world_tensor[index][nui.NeuralWorld._ROW_X] = float(x)
-        world.world_tensor[index][nui.NeuralWorld._ROW_Y] = float(y)
-    else:
-        world.world_tensor[index, nui.NeuralWorld._ROW_X] = float(x)
-        world.world_tensor[index, nui.NeuralWorld._ROW_Y] = float(y)
-    world._global_dirty = True
-
-
 def _window_should_close(renderer: nui.InstancedModernGLRenderer) -> bool:
     if renderer.window is None or nui.glfw is None:
         return False
@@ -69,11 +58,8 @@ def main() -> None:
         while not stop_event.is_set():
             if _window_should_close(renderer):
                 return
-            _set_object_xy(
-                world,
-                ship_index,
-                math.sin(t) * SHIP_X_AMPLITUDE,
-                math.cos(t * SHIP_Y_FREQUENCY) * SHIP_Y_AMPLITUDE,
+            world.set_local_position(
+                ship_index, math.sin(t) * SHIP_X_AMPLITUDE, math.cos(t * SHIP_Y_FREQUENCY) * SHIP_Y_AMPLITUDE
             )
             t += TIME_STEP
             time.sleep(SLEEP_SECONDS)
