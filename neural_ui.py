@@ -3,6 +3,7 @@ from __future__ import annotations
 from array import array
 from dataclasses import dataclass, field
 from enum import IntEnum
+from string import Template
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:  # pragma: no cover - exercised when CuPy is installed
@@ -100,6 +101,7 @@ class NeuralWorld:
     _ROW_UNUSED = 9  # Reserved for future per-instance shader attributes.
     _WORLD_COLUMNS = 10
     _MOTION_COLUMNS = 6
+    _MOTION_POSITION_AXES = (_ROW_X, _ROW_Y)
     _MOTION_POSITION_SLICE = slice(_ROW_X, _ROW_Y + 1)
     _COLOR_CHANNELS = 3
     _DEFAULT_CORNER_RADIUS_FACTOR = 0.1
@@ -289,9 +291,8 @@ class NeuralWorld:
                 vel = self.velocity_tensor[idx]
                 row[self._ROW_X] += vel[self._ROW_X] * dt
                 row[self._ROW_Y] += vel[self._ROW_Y] * dt
-                vel[self._MOTION_POSITION_SLICE] = [
-                    component * self.friction_coefficient for component in vel[self._MOTION_POSITION_SLICE]
-                ]
+                for axis in self._MOTION_POSITION_AXES:
+                    vel[axis] *= self.friction_coefficient
                 tracked = row[self._ROW_STATE] in (active_state, out_of_screen_state)
                 outside_screen = (
                     abs(row[self._ROW_X]) > self._SCREEN_BOUNDARY or abs(row[self._ROW_Y]) > self._SCREEN_BOUNDARY
@@ -795,19 +796,20 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     v_params = in_params;
                 }
             """,
-            fragment_shader="""
+            fragment_shader=Template(
+                """
                 #version 330
-                const float MIN_SOFTNESS = %(min_softness)s;
-                const float GLOW_FALLOFF = %(glow_falloff)s;
-                const float GLOW_INTENSITY = %(glow_intensity)s;
-                const float SHADOW_OFFSET = %(shadow_offset)s;
-                const float SHADOW_FALLOFF = %(shadow_falloff)s;
-                const float SHADOW_INTENSITY = %(shadow_intensity)s;
-                const float BORDER_BRIGHTNESS = %(border_brightness)s;
-                const float GLOW_CONTRIBUTION = %(glow_contribution)s;
-                const float SHADOW_CONTRIBUTION = %(shadow_contribution)s;
-                const float GLOW_ALPHA_CONTRIBUTION = %(glow_alpha_contribution)s;
-                const float ALPHA_DISCARD_THRESHOLD = %(alpha_discard_threshold)s;
+                const float MIN_SOFTNESS = $min_softness;
+                const float GLOW_FALLOFF = $glow_falloff;
+                const float GLOW_INTENSITY = $glow_intensity;
+                const float SHADOW_OFFSET = $shadow_offset;
+                const float SHADOW_FALLOFF = $shadow_falloff;
+                const float SHADOW_INTENSITY = $shadow_intensity;
+                const float BORDER_BRIGHTNESS = $border_brightness;
+                const float GLOW_CONTRIBUTION = $glow_contribution;
+                const float SHADOW_CONTRIBUTION = $shadow_contribution;
+                const float GLOW_ALPHA_CONTRIBUTION = $glow_alpha_contribution;
+                const float ALPHA_DISCARD_THRESHOLD = $alpha_discard_threshold;
                 in vec3 v_color;
                 in vec2 v_local_pos;
                 in vec2 v_half_size;
@@ -845,20 +847,20 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     }
                     fragColor = vec4(color, clamp(alpha, 0.0, 1.0));
                 }
-            """
-            % {
-                "min_softness": self._SHADER_MIN_SOFTNESS,
-                "glow_falloff": self._SHADER_GLOW_FALLOFF,
-                "glow_intensity": self._SHADER_GLOW_INTENSITY,
-                "shadow_offset": self._SHADER_SHADOW_OFFSET,
-                "shadow_falloff": self._SHADER_SHADOW_FALLOFF,
-                "shadow_intensity": self._SHADER_SHADOW_INTENSITY,
-                "border_brightness": self._SHADER_BORDER_BRIGHTNESS,
-                "glow_contribution": self._SHADER_GLOW_CONTRIBUTION,
-                "shadow_contribution": self._SHADER_SHADOW_CONTRIBUTION,
-                "glow_alpha_contribution": self._SHADER_GLOW_ALPHA_CONTRIBUTION,
-                "alpha_discard_threshold": self._SHADER_ALPHA_DISCARD_THRESHOLD,
-            },
+                """
+            ).substitute(
+                min_softness=self._SHADER_MIN_SOFTNESS,
+                glow_falloff=self._SHADER_GLOW_FALLOFF,
+                glow_intensity=self._SHADER_GLOW_INTENSITY,
+                shadow_offset=self._SHADER_SHADOW_OFFSET,
+                shadow_falloff=self._SHADER_SHADOW_FALLOFF,
+                shadow_intensity=self._SHADER_SHADOW_INTENSITY,
+                border_brightness=self._SHADER_BORDER_BRIGHTNESS,
+                glow_contribution=self._SHADER_GLOW_CONTRIBUTION,
+                shadow_contribution=self._SHADER_SHADOW_CONTRIBUTION,
+                glow_alpha_contribution=self._SHADER_GLOW_ALPHA_CONTRIBUTION,
+                alpha_discard_threshold=self._SHADER_ALPHA_DISCARD_THRESHOLD,
+            ),
         )
         quad = array("f", (-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0))
         self._quad_vbo = self._ctx.buffer(quad.tobytes())
