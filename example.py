@@ -14,6 +14,8 @@ SHIP_Y_FREQUENCY = 0.8
 TIME_STEP = 0.02
 # Delay between logic ticks (seconds).
 SLEEP_SECONDS = 0.01
+# Maximum time to wait for logic thread shutdown (seconds).
+THREAD_SHUTDOWN_TIMEOUT = 1.0
 
 
 def _window_should_close(renderer: nui.InstancedModernGLRenderer) -> bool:
@@ -26,9 +28,9 @@ def main() -> None:
     world = nui.NeuralWorld(use_cupy=nui.cp is not None, initial_capacity=5000, growth_chunk=2000)
 
     ship = nui.ObjectGroup(x=0.0, y=0.0, width=0.08, height=0.08, z=2.0)
-    satellite_count = 200
-    for i in range(satellite_count):
-        angle = (i / satellite_count) * (2.0 * math.pi)
+    child_object_count = 200
+    for i in range(child_object_count):
+        angle = (i / child_object_count) * (2.0 * math.pi)
         ship.add(
             nui.Object(
                 x=math.sin(angle) * 0.2,
@@ -75,7 +77,7 @@ def main() -> None:
         renderer.run()
     finally:
         stop_event.set()
-        logic_thread.join(timeout=1.0)
+        logic_thread.join(timeout=THREAD_SHUTDOWN_TIMEOUT)
 
 
 if __name__ == "__main__":

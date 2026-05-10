@@ -523,6 +523,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
     def __init__(self, *args, random_object_colors: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.random_object_colors = random_object_colors
+        # These are initialized after OpenGL context creation inside create_window().
         self._quad_vbo = None
         self._instance_data_vbo = None
         self._instance_color_vbo = None
