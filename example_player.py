@@ -17,6 +17,7 @@ Controls
 
 import threading
 import time
+from pathlib import Path
 
 import neural_ui as nui
 
@@ -56,10 +57,20 @@ def _window_should_close(renderer: nui.InstancedModernGLRenderer) -> bool:
 
 def main() -> None:
     world = nui.NeuralWorld(use_cupy=False)
+    spritesheet_path = Path(__file__).resolve().with_name("character.png")
+    if not spritesheet_path.is_file():
+        raise FileNotFoundError(f"Missing spritesheet image: {spritesheet_path}")
 
-    # Plain Object — we register the spritesheet manually so the renderer's
-    # automatic SpriteObject handling doesn't interfere.
-    player = nui.Object(x=0.0, y=0.0, width=0.15, height=0.2, z=1.0)
+    player = nui.SpriteObject(
+        x=0.0,
+        y=0.0,
+        width=0.15,
+        height=0.2,
+        z=1.0,
+        spritesheet=str(spritesheet_path),
+        grid=(SPRITE_COLS, SPRITE_ROWS),
+        fps=0.0,
+    )
     world.register(player)
     player_index = player.tensor_index
     if player_index is None:
@@ -74,23 +85,17 @@ def main() -> None:
         vsync=True,
     )
 
-    # Open the window first so we can access the texture manager and set up
-    # the key callback before entering the render loop.
+    # Open the window so we can set up key callback before rendering.
     renderer.create_window()
-
-    # Register all frames from the spritesheet; returns contiguous layer IDs.
-    all_layers = renderer._texture_manager.register_spritesheet(
-        "character.png", SPRITE_COLS, SPRITE_ROWS
-    )
-
-    def row_layers(direction: int):
-        """Return the layer-ID slice for the given direction row."""
-        start = direction * SPRITE_COLS
-        return all_layers[start : start + SPRITE_COLS]
 
     # Start in idle-down pose (first frame of the down row, fps=0 → no auto-advance).
     current_direction = DIR_DOWN
     is_moving = False
+    def row_layers(direction: int):
+        """Return contiguous layer IDs for the given direction row."""
+        start = direction * SPRITE_COLS
+        return list(range(start, start + SPRITE_COLS))
+
     world.configure_sprite_animation(player_index, row_layers(DIR_DOWN), 0.0)
 
     # --- Keyboard state (updated from GLFW callback on the main thread) ---
