@@ -98,7 +98,7 @@ class NeuralWorld:
     _ROW_CORNER_RADIUS = 6
     _ROW_BORDER_THICKNESS = 7
     _ROW_SOFTNESS = 8
-    _ROW_UNUSED = 9  # Reserved for future per-instance shader attributes.
+    _ROW_RESERVED_SHADER_PARAM = 9  # Reserved for future per-instance shader attributes.
     _WORLD_COLUMNS = 10
     _MOTION_COLUMNS = 6
     _MOTION_POSITION_AXES = (_ROW_X, _ROW_Y)
@@ -213,7 +213,7 @@ class NeuralWorld:
             self._python_parent_index.append(parent_index)
             self._python_global_rows.append(row[:])
             index = len(self.world_tensor) - 1
-            initial_color = self._default_color or self._generate_color_from_index(index)
+            initial_color = self._initial_color_for_index(index)
             self.color_tensor.append(list(initial_color))
         else:
             index = self._size
@@ -221,7 +221,7 @@ class NeuralWorld:
             row_tensor = self.xp.asarray(row, dtype=self.xp.float32)
             self.world_tensor[index, :] = row_tensor
             self.velocity_tensor[index, :] = 0.0
-            initial_color = self._default_color or self._generate_color_from_index(index)
+            initial_color = self._initial_color_for_index(index)
             self.color_tensor[index, :] = self.xp.asarray(initial_color, dtype=self.xp.float32)
             self._parent_index[index] = int(parent_index)
             self._global_tensor[index, :] = row_tensor
@@ -279,6 +279,9 @@ class NeuralWorld:
         b = 0.35 + (((seed >> 16) & 0xFF) / 255.0) * 0.65
         return r, g, b
 
+    def _initial_color_for_index(self, index: int) -> Tuple[float, float, float]:
+        return self._default_color or self._generate_color_from_index(index)
+
     def update(self, dt: float) -> None:
         # Ignore negligible timesteps to avoid needless tensor work for near-zero frame deltas.
         if abs(float(dt)) < 1e-9:
@@ -321,10 +324,10 @@ class NeuralWorld:
         states = rows[:, self._ROW_STATE]
         x_positions = global_rows[:, self._ROW_X]
         y_positions = global_rows[:, self._ROW_Y]
-        outside = (self.xp.abs(x_positions) > self._SCREEN_BOUNDARY) | (self.xp.abs(y_positions) > self._SCREEN_BOUNDARY)
-        inside_reactivate = (self.xp.abs(x_positions) <= self._REACTIVATE_BOUNDARY) & (
-            self.xp.abs(y_positions) <= self._REACTIVATE_BOUNDARY
-        )
+        abs_x_positions = self.xp.abs(x_positions)
+        abs_y_positions = self.xp.abs(y_positions)
+        outside = (abs_x_positions > self._SCREEN_BOUNDARY) | (abs_y_positions > self._SCREEN_BOUNDARY)
+        inside_reactivate = (abs_x_positions <= self._REACTIVATE_BOUNDARY) & (abs_y_positions <= self._REACTIVATE_BOUNDARY)
         tracked_states = (states == float(ObjectState.ACTIVE)) | (states == float(ObjectState.OUTOFSCREEN))
         states[tracked_states & outside] = float(ObjectState.OUTOFSCREEN)
         states[(states == float(ObjectState.OUTOFSCREEN)) & inside_reactivate] = float(ObjectState.ACTIVE)
@@ -706,7 +709,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         NeuralWorld._ROW_CORNER_RADIUS,
         NeuralWorld._ROW_BORDER_THICKNESS,
         NeuralWorld._ROW_SOFTNESS,
-        NeuralWorld._ROW_UNUSED,
+        NeuralWorld._ROW_RESERVED_SHADER_PARAM,
     )
 
     def __init__(self, *args, random_object_colors: bool = False, **kwargs) -> None:
@@ -800,6 +803,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 """
                 #version 330
                 const float MIN_SOFTNESS = $min_softness;
+                const float MIN_INNER_SIZE = $min_inner_size;
                 const float GLOW_FALLOFF = $glow_falloff;
                 const float GLOW_INTENSITY = $glow_intensity;
                 const float SHADOW_OFFSET = $shadow_offset;
@@ -827,7 +831,8 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                     float softness = max(v_params.z, MIN_SOFTNESS);
                     float sdf = roundedBoxSdf(v_local_pos, v_half_size, cornerRadius);
 
-                    vec2 innerHalfSize = max(v_half_size - vec2(borderThickness), vec2(MIN_SOFTNESS));
+                    // Prevent degenerate inner geometry when thick borders collapse the fill area.
+                    vec2 innerHalfSize = max(v_half_size - vec2(borderThickness), vec2(MIN_INNER_SIZE));
                     float innerRadius = clamp(cornerRadius - borderThickness, 0.0, min(innerHalfSize.x, innerHalfSize.y));
                     float innerSdf = roundedBoxSdf(v_local_pos, innerHalfSize, innerRadius);
 
@@ -850,6 +855,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 """
             ).substitute(
                 min_softness=self._SHADER_MIN_SOFTNESS,
+                min_inner_size=self._SHADER_MIN_SOFTNESS,
                 glow_falloff=self._SHADER_GLOW_FALLOFF,
                 glow_intensity=self._SHADER_GLOW_INTENSITY,
                 shadow_offset=self._SHADER_SHADOW_OFFSET,
