@@ -67,6 +67,8 @@ class NeuralWorld:
     _ROW_HALF_H = 3
     _ROW_Z = 4
     _ROW_STATE = 5
+    _COLOR_CHANNELS = 3
+    _SCREEN_BOUNDARY = 1.5
 
     def __init__(self, use_cupy: bool = True, initial_capacity: int = 10_000, growth_chunk: int = 10_000) -> None:
         if initial_capacity <= 0:
@@ -81,18 +83,24 @@ class NeuralWorld:
             self.xp = cp
             self.backend = "cupy"
             self.world_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
+            self.velocity_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
+            self.color_tensor = self.xp.zeros((self._capacity, self._COLOR_CHANNELS), dtype=self.xp.float32)
             self._global_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
             self._parent_index = self.xp.full((self._capacity,), -1, dtype=self.xp.int32)
         elif np is not None:
             self.xp = np
             self.backend = "numpy"
             self.world_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
+            self.velocity_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
+            self.color_tensor = self.xp.zeros((self._capacity, self._COLOR_CHANNELS), dtype=self.xp.float32)
             self._global_tensor = self.xp.zeros((self._capacity, 6), dtype=self.xp.float32)
             self._parent_index = self.xp.full((self._capacity,), -1, dtype=self.xp.int32)
         else:
             self.xp = None
             self.backend = "python"
             self.world_tensor: List[List[float]] = []
+            self.velocity_tensor: List[List[float]] = []
+            self.color_tensor: List[List[float]] = []
             self._python_global_rows: List[List[float]] = []
             self._python_parent_index: List[int] = []
         self._objects: List[Object] = []
@@ -126,6 +134,9 @@ class NeuralWorld:
         expand_by = new_capacity - self._capacity
         zeros = self.xp.zeros((expand_by, 6), dtype=self.xp.float32)
         self.world_tensor = self.xp.concatenate((self.world_tensor, zeros), axis=0)
+        self.velocity_tensor = self.xp.concatenate((self.velocity_tensor, zeros), axis=0)
+        color_zeros = self.xp.zeros((expand_by, self._COLOR_CHANNELS), dtype=self.xp.float32)
+        self.color_tensor = self.xp.concatenate((self.color_tensor, color_zeros), axis=0)
         self._global_tensor = self.xp.concatenate((self._global_tensor, zeros), axis=0)
         parent_padding = self.xp.full((expand_by,), -1, dtype=self.xp.int32)
         self._parent_index = self.xp.concatenate((self._parent_index, parent_padding), axis=0)
@@ -142,6 +153,8 @@ class NeuralWorld:
         ]
         if self.backend == "python":
             self.world_tensor.append(row)
+            self.velocity_tensor.append([0.0] * 6)
+            self.color_tensor.append(list(self._generate_color_from_index(len(self.world_tensor) - 1)))
             self._python_parent_index.append(parent_index)
             self._python_global_rows.append(row[:])
             index = len(self.world_tensor) - 1
@@ -150,6 +163,8 @@ class NeuralWorld:
             self._ensure_capacity(index + 1)
             row_tensor = self.xp.asarray(row, dtype=self.xp.float32)
             self.world_tensor[index, :] = row_tensor
+            self.velocity_tensor[index, :] = 0.0
+            self.color_tensor[index, :] = self.xp.asarray(self._generate_color_from_index(index), dtype=self.xp.float32)
             self._parent_index[index] = int(parent_index)
             self._global_tensor[index, :] = row_tensor
             self._size += 1
@@ -169,6 +184,55 @@ class NeuralWorld:
             self.world_tensor[index, self._ROW_X] = float(x)
             self.world_tensor[index, self._ROW_Y] = float(y)
         self._global_dirty = True
+
+    @staticmethod
+    def _generate_color_from_index(index: int) -> Tuple[float, float, float]:
+        # Linear Congruential Generator constants for deterministic per-index colors.
+        seed = (index * 1664525 + 1013904223) & 0xFFFFFFFF
+        r = 0.35 + (((seed >> 0) & 0xFF) / 255.0) * 0.65
+        g = 0.35 + (((seed >> 8) & 0xFF) / 255.0) * 0.65
+        b = 0.35 + (((seed >> 16) & 0xFF) / 255.0) * 0.65
+        return r, g, b
+
+    def update(self, dt: float) -> None:
+        # Ignore negligible timesteps to avoid needless tensor work for near-zero frame deltas.
+        if abs(float(dt)) < 1e-9:
+            return
+        if self.backend == "python":
+            active_state = float(ObjectState.ACTIVE)
+            out_of_screen_state = float(ObjectState.OUTOFSCREEN)
+            for idx in range(len(self.world_tensor)):
+                row = self.world_tensor[idx]
+                vel = self.velocity_tensor[idx]
+                row[self._ROW_X] += vel[self._ROW_X] * dt
+                row[self._ROW_Y] += vel[self._ROW_Y] * dt
+                tracked = row[self._ROW_STATE] in (active_state, out_of_screen_state)
+                if tracked and (
+                    row[self._ROW_X] < -self._SCREEN_BOUNDARY or row[self._ROW_X] > self._SCREEN_BOUNDARY
+                ):
+                    row[self._ROW_STATE] = out_of_screen_state
+                elif tracked:
+                    row[self._ROW_STATE] = active_state
+            self._global_dirty = True
+            return
+
+        if self._size == 0:
+            return
+        rows = self.world_tensor[: self._size]
+        velocity = self.velocity_tensor[: self._size]
+        rows[:, :2] += velocity[:, :2] * float(dt)
+        self._global_dirty = True
+        self._sync_global_transforms()
+
+        global_rows = self._global_tensor[: self._size]
+        states = rows[:, self._ROW_STATE]
+        x_positions = global_rows[:, self._ROW_X]
+        outside = (x_positions < -self._SCREEN_BOUNDARY) | (x_positions > self._SCREEN_BOUNDARY)
+        tracked_states = (states == float(ObjectState.ACTIVE)) | (states == float(ObjectState.OUTOFSCREEN))
+        states[tracked_states & outside] = float(ObjectState.OUTOFSCREEN)
+        states[tracked_states & ~outside] = float(ObjectState.ACTIVE)
+        rows[:, self._ROW_STATE] = states
+        global_rows[:, self._ROW_STATE] = states
 
     def _sync_global_transforms(self) -> None:
         if not self._global_dirty:
@@ -249,6 +313,12 @@ class NeuralWorld:
             resolved[ready_indices] = True
             remaining -= ready_count
         self._global_dirty = False
+
+    def sync_global_transforms(self) -> None:
+        self._sync_global_transforms()
+
+    def hover_index(self) -> Optional[int]:
+        return self._last_hover_index
 
     def global_row(self, index: int) -> Optional[Sequence[float]]:
         if index < 0 or index >= self.size:
@@ -517,8 +587,15 @@ class ModernGLRenderer:
 class InstancedModernGLRenderer(ModernGLRenderer):
     """ModernGL renderer that uses instanced quads for better batching efficiency."""
 
-    _INITIAL_INSTANCE_DATA_BUFFER_SIZE = 16 * 1024
+    _INITIAL_INSTANCE_DATA_BUFFER_SIZE = 20 * 1024
     _INITIAL_INSTANCE_COLOR_BUFFER_SIZE = 12 * 1024
+    _INSTANCE_DATA_COLUMNS = (
+        NeuralWorld._ROW_X,
+        NeuralWorld._ROW_Y,
+        NeuralWorld._ROW_HALF_W,
+        NeuralWorld._ROW_HALF_H,
+        NeuralWorld._ROW_STATE,
+    )
 
     def __init__(self, *args, random_object_colors: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -528,56 +605,45 @@ class InstancedModernGLRenderer(ModernGLRenderer):
         self._instance_data_vbo = None
         self._instance_color_vbo = None
 
-    @staticmethod
-    def _generate_color_from_index(index: int) -> Tuple[float, float, float]:
-        """Generate a deterministic bright color from an object index."""
-        # Linear Congruential Generator constants keep color generation deterministic
-        # without storing separate per-object color arrays.
-        seed = (index * 1664525 + 1013904223) & 0xFFFFFFFF
-        r = 0.35 + (((seed >> 0) & 0xFF) / 255.0) * 0.65
-        g = 0.35 + (((seed >> 8) & 0xFF) / 255.0) * 0.65
-        b = 0.35 + (((seed >> 16) & 0xFF) / 255.0) * 0.65
-        return r, g, b
-
-    def _build_instances(self) -> Tuple[bytes, bytes, int]:
-        instance_data = array("f")
-        instance_colors = array("f")
-        active_count = 0
-        active_state = float(ObjectState.ACTIVE)
-        for obj, row in self.world.iter_render_rows():
-            if row[NeuralWorld._ROW_STATE] != active_state:
-                continue
-            instance_data.extend(
-                (
-                    row[NeuralWorld._ROW_X],
-                    row[NeuralWorld._ROW_Y],
-                    row[NeuralWorld._ROW_HALF_W],
-                    row[NeuralWorld._ROW_HALF_H],
-                )
-            )
-            if obj.tensor_index == self.world._last_hover_index:
-                color = self.hover_color
-            elif self.random_object_colors:
-                color = self._generate_color_from_index(obj.tensor_index)
-            else:
-                color = self.object_color
-            instance_colors.extend(color)
-            active_count += 1
-        return instance_data.tobytes(), instance_colors.tobytes(), active_count
+    def _as_cpu_tensor(self, tensor):
+        """Convert CuPy tensors to NumPy arrays for byte upload; leave others unchanged."""
+        if self.world.backend == "cupy":
+            return cp.asnumpy(tensor)
+        return tensor
 
     def _draw_world(self) -> None:
         self._ctx.clear(*self.background_color, 1.0)
-        data_payload, color_payload, active_count = self._build_instances()
-        if active_count == 0:
+        if self.world.backend == "python":
+            super()._draw_world()
+            return
+        if self.world.size == 0:
+            return
+        self.world.sync_global_transforms()
+        rows = self.world._global_tensor[: self.world.size]
+        instance_data_tensor = rows[:, self._INSTANCE_DATA_COLUMNS]
+        if self.random_object_colors:
+            color_tensor = self.world.color_tensor[: self.world.size]
+        else:
+            color_tensor = self.world.xp.empty((self.world.size, 3), dtype=self.world.xp.float32)
+            color_tensor[:, 0] = self.object_color[0]
+            color_tensor[:, 1] = self.object_color[1]
+            color_tensor[:, 2] = self.object_color[2]
+        data_payload = self._as_cpu_tensor(instance_data_tensor).tobytes()
+        color_payload = self._as_cpu_tensor(color_tensor).tobytes()
+        if not data_payload:
             return
         self._program["aspect"].value = self.width / self.height
+        self._program["active_state"].value = float(ObjectState.ACTIVE)
+        hover_index = self.world.hover_index()
+        self._program["hover_index"].value = -1 if hover_index is None else int(hover_index)
+        self._program["hover_color"].value = self.hover_color
         if len(data_payload) > self._instance_data_vbo.size:
             self._instance_data_vbo.orphan(len(data_payload))
         if len(color_payload) > self._instance_color_vbo.size:
             self._instance_color_vbo.orphan(len(color_payload))
         self._instance_data_vbo.write(data_payload)
         self._instance_color_vbo.write(color_payload)
-        self._vao.render(moderngl.TRIANGLE_STRIP, instances=active_count)
+        self._vao.render(moderngl.TRIANGLE_STRIP, instances=self.world.size)
 
     def create_window(self):
         """Create a GLFW window and configure an instanced quad-rendering pipeline."""
@@ -598,15 +664,21 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             vertex_shader="""
                 #version 330
                 uniform float aspect;
+                uniform float active_state;
+                uniform int hover_index;
+                uniform vec3 hover_color;
                 in vec2 in_vert;
                 in vec4 in_data;
+                in float in_state;
                 in vec3 in_color;
                 out vec3 v_color;
                 void main() {
-                    vec2 pos = in_data.xy + (in_vert * in_data.zw);
+                    float visible = in_state == active_state ? 1.0 : 0.0;
+                    vec2 scale = in_data.zw * visible;
+                    vec2 pos = in_data.xy + (in_vert * scale);
                     pos.x /= aspect;
                     gl_Position = vec4(pos, 0.0, 1.0);
-                    v_color = in_color;
+                    v_color = gl_InstanceID == hover_index ? hover_color : in_color;
                 }
             """,
             fragment_shader="""
@@ -626,7 +698,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
             self._program,
             [
                 (self._quad_vbo, "2f", "in_vert"),
-                (self._instance_data_vbo, "4f /i", "in_data"),
+                (self._instance_data_vbo, "4f 1f /i", "in_data", "in_state"),
                 (self._instance_color_vbo, "3f /i", "in_color"),
             ],
         )

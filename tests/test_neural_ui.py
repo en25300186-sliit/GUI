@@ -145,6 +145,43 @@ class NeuralWorldTests(unittest.TestCase):
         with self.assertRaises(IndexError):
             world.set_local_position(99, 0.0, 0.0)
 
+    def test_register_initializes_velocity_and_color_tensors(self):
+        world = NeuralWorld(use_cupy=False)
+        index = world.register(Object(x=0, y=0, width=1, height=1, on_hover=lambda _: None))
+
+        if world.backend == "python":
+            velocity = world.velocity_tensor[index]
+            color = world.color_tensor[index]
+        else:
+            velocity = world.velocity_tensor[index].tolist()
+            color = world.color_tensor[index].tolist()
+        self.assertEqual(velocity, [0.0] * 6)
+        self.assertEqual(len(color), 3)
+        for channel in color:
+            self.assertGreaterEqual(channel, 0.35)
+            self.assertLessEqual(channel, 1.0)
+
+    def test_update_applies_velocity_and_state_switching(self):
+        world = NeuralWorld(use_cupy=False)
+        # Start just inside boundary so one update step pushes it to OUTOFSCREEN.
+        idx_active = world.register(Object(x=1.45, y=0.0, width=1, height=1, state=ObjectState.ACTIVE, on_hover=lambda _: None))
+        idx_hidden = world.register(Object(x=1.6, y=0.0, width=1, height=1, state=ObjectState.HIDDEN, on_hover=lambda _: None))
+
+        if world.backend == "python":
+            world.velocity_tensor[idx_active][NeuralWorld._ROW_X] = 0.2
+            world.velocity_tensor[idx_hidden][NeuralWorld._ROW_X] = 0.0
+        else:
+            world.velocity_tensor[idx_active, NeuralWorld._ROW_X] = 0.2
+            world.velocity_tensor[idx_hidden, NeuralWorld._ROW_X] = 0.0
+
+        world.update(1.0)
+
+        row_active = world.global_row(idx_active)
+        row_hidden = world.global_row(idx_hidden)
+        self.assertGreater(row_active[NeuralWorld._ROW_X], 1.5)
+        self.assertEqual(int(row_active[NeuralWorld._ROW_STATE]), int(ObjectState.OUTOFSCREEN))
+        self.assertEqual(int(row_hidden[NeuralWorld._ROW_STATE]), int(ObjectState.HIDDEN))
+
 
 if __name__ == "__main__":
     unittest.main()
