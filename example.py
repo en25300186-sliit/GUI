@@ -4,6 +4,12 @@ import time
 
 import neural_ui as nui
 
+SHIP_X_AMPLITUDE = 0.6
+SHIP_Y_AMPLITUDE = 0.3
+SHIP_Y_FREQUENCY = 0.8
+TIME_STEP = 0.02
+SLEEP_SECONDS = 0.01
+
 
 def _set_object_xy(world: nui.NeuralWorld, index: int, x: float, y: float) -> None:
     """Update a registered object's local XY directly in the active backend tensor."""
@@ -23,7 +29,7 @@ def _window_should_close(renderer: nui.InstancedModernGLRenderer) -> bool:
 
 
 def main() -> None:
-    world = nui.NeuralWorld(use_cupy=True, initial_capacity=5_000, growth_chunk=2_000)
+    world = nui.NeuralWorld(use_cupy=nui.cp is not None, initial_capacity=5_000, growth_chunk=2_000)
 
     ship = nui.ObjectGroup(x=0.0, y=0.0, width=0.08, height=0.08, z=2.0)
     drone_count = 200
@@ -63,9 +69,14 @@ def main() -> None:
         while not stop_event.is_set():
             if _window_should_close(renderer):
                 return
-            _set_object_xy(world, ship_index, math.sin(t) * 0.6, math.cos(t * 0.8) * 0.3)
-            t += 0.02
-            time.sleep(0.01)
+            _set_object_xy(
+                world,
+                ship_index,
+                math.sin(t) * SHIP_X_AMPLITUDE,
+                math.cos(t * SHIP_Y_FREQUENCY) * SHIP_Y_AMPLITUDE,
+            )
+            t += TIME_STEP
+            time.sleep(SLEEP_SECONDS)
 
     logic_thread = threading.Thread(target=logic_loop)
     logic_thread.start()
