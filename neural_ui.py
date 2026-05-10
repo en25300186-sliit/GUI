@@ -334,7 +334,7 @@ class NeuralWorld:
 
         start_layer = int(frame_layers[0])
         frame_count = len(frame_layers)
-        if any(int(start_layer + offset) != int(layer) for offset, layer in enumerate(frame_layers)):
+        if int(frame_layers[-1]) != int(start_layer + frame_count - 1):
             raise ValueError("frame_layers must be contiguous texture-array layer IDs")
         self.set_costume_id(index, float(start_layer))
         if self.backend == "python":
@@ -449,12 +449,12 @@ class NeuralWorld:
         frame_count = self._animation_frame_count[: self._size]
         fps = self._animation_fps[: self._size]
         active_animation = (frame_count > 1.0) & (fps > 0.0)
-        if not bool(self._to_scalar(active_animation.any())):
+        if not self._to_scalar(active_animation.any()):
             return
         self._animation_accumulator[: self._size] += dt_value * fps
         advanced_frames = self.xp.floor(self._animation_accumulator[: self._size]).astype(self.xp.int32)
         active_advancement = active_animation & (advanced_frames > 0)
-        if not bool(self._to_scalar(active_advancement.any())):
+        if not self._to_scalar(active_advancement.any()):
             return
         updated_accumulator = self._animation_accumulator[: self._size] - advanced_frames.astype(self.xp.float32)
         self._animation_accumulator[: self._size] = self.xp.where(
@@ -1055,11 +1055,12 @@ class InstancedModernGLRenderer(ModernGLRenderer):
 
                 void main() {
                     if (v_costume_id >= 0.0) {
+                        // Map local quad coordinates from [-half_size, +half_size] into [0, 1] UV space.
                         vec2 uv = (v_local_pos / (v_half_size * 2.0)) + vec2(0.5);
                         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
                             discard;
                         }
-                        fragColor = texture(texture_array, vec3(clamp(uv, 0.0, 1.0), v_costume_id));
+                        fragColor = texture(texture_array, vec3(uv, v_costume_id));
                         return;
                     }
                     float cornerRadius = clamp(v_params.x, 0.0, min(v_half_size.x, v_half_size.y));
