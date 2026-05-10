@@ -515,6 +515,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
 
     @staticmethod
     def _index_color(index: int) -> Tuple[float, float, float]:
+        """Generate a deterministic bright color from an object index."""
         seed = (index * 1664525 + 1013904223) & 0xFFFFFFFF
         r = 0.35 + (((seed >> 0) & 0xFF) / 255.0) * 0.65
         g = 0.35 + (((seed >> 8) & 0xFF) / 255.0) * 0.65

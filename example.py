@@ -6,6 +6,7 @@ import neural_ui as nui
 
 
 def _set_object_xy(world: nui.NeuralWorld, index: int, x: float, y: float) -> None:
+    """Update a registered object's local XY directly in the active backend tensor."""
     if world.backend == "python":
         world.world_tensor[index][nui.NeuralWorld._ROW_X] = float(x)
         world.world_tensor[index][nui.NeuralWorld._ROW_Y] = float(y)
@@ -13,6 +14,12 @@ def _set_object_xy(world: nui.NeuralWorld, index: int, x: float, y: float) -> No
         world.world_tensor[index, nui.NeuralWorld._ROW_X] = float(x)
         world.world_tensor[index, nui.NeuralWorld._ROW_Y] = float(y)
     world._global_dirty = True
+
+
+def _window_should_close(renderer: nui.InstancedModernGLRenderer) -> bool:
+    if renderer.window is None or nui.glfw is None:
+        return False
+    return bool(nui.glfw.window_should_close(renderer.window))
 
 
 def main() -> None:
@@ -54,7 +61,7 @@ def main() -> None:
     def logic_loop() -> None:
         t = 0.0
         while not stop_event.is_set():
-            if renderer.window is not None and nui.glfw is not None and nui.glfw.window_should_close(renderer.window):
+            if _window_should_close(renderer):
                 return
             _set_object_xy(world, ship_index, math.sin(t) * 0.6, math.cos(t * 0.8) * 0.3)
             t += 0.02
