@@ -3,6 +3,7 @@ from __future__ import annotations
 from array import array
 from dataclasses import dataclass, field
 from enum import IntEnum
+from pathlib import Path
 from string import Template
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -25,6 +26,16 @@ try:  # pragma: no cover - optional dependency for shader rendering
     import moderngl
 except ImportError:  # pragma: no cover - fallback for environments without ModernGL
     moderngl = None
+
+try:  # pragma: no cover - optional dependency for texture loading
+    from PIL import Image
+except ImportError:  # pragma: no cover - fallback when PIL is unavailable
+    Image = None
+
+try:  # pragma: no cover - optional dependency for texture loading
+    import cv2
+except ImportError:  # pragma: no cover - fallback when OpenCV is unavailable
+    cv2 = None
 
 
 class ObjectState(IntEnum):
@@ -86,6 +97,13 @@ class ObjectGroup(Object):
         if not isinstance(subitem, Object):
             raise TypeError("ObjectGroup accepts Object or ObjectGroup instances")
         self.subitems.append(subitem)
+
+
+@dataclass
+class SpriteObject(Object):
+    costumes: Sequence[str] = field(default_factory=tuple)
+    fps: float = 0.0
+    _texture_layers: Optional[List[int]] = field(default=None, init=False, repr=False, compare=False)
 
 
 class NeuralWorld:
