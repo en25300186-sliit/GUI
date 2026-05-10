@@ -265,7 +265,7 @@ class NeuralWorldTests(unittest.TestCase):
         world.update(1.0)
         self.assertEqual(world.global_row(idx)[NeuralWorld._ROW_COSTUME_ID], 10.0)
 
-    def test_plain_object_with_costumes_gets_texture_layers(self):
+    def test_object_with_costumes_gets_texture_layers(self):
         class FakeTextureManager:
             layer_count = 2
 
@@ -294,6 +294,12 @@ class NeuralWorldTests(unittest.TestCase):
 
         self.assertEqual(obj._texture_layers, [7, 8])
         self.assertEqual(world.global_row(idx)[NeuralWorld._ROW_COSTUME_ID], 7.0)
+        if world.backend == "python":
+            self.assertEqual(world._python_animation_fps[idx], 4.0)
+            self.assertEqual(world._python_animation_frame_count[idx], 2.0)
+        else:
+            self.assertEqual(float(world._animation_fps[idx]), 4.0)
+            self.assertEqual(float(world._animation_frame_count[idx]), 2.0)
 
 
 if __name__ == "__main__":
