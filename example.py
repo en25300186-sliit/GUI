@@ -49,17 +49,24 @@ def main() -> None:
         vsync=True,
     )
 
+    stop_event = threading.Event()
+
     def logic_loop() -> None:
         t = 0.0
-        while True:
+        while not stop_event.is_set():
             if renderer.window is not None and nui.glfw is not None and nui.glfw.window_should_close(renderer.window):
                 return
             _set_object_xy(world, ship_index, math.sin(t) * 0.6, math.cos(t * 0.8) * 0.3)
             t += 0.02
             time.sleep(0.01)
 
-    threading.Thread(target=logic_loop, daemon=True).start()
-    renderer.run()
+    logic_thread = threading.Thread(target=logic_loop)
+    logic_thread.start()
+    try:
+        renderer.run()
+    finally:
+        stop_event.set()
+        logic_thread.join(timeout=1.0)
 
 
 if __name__ == "__main__":
