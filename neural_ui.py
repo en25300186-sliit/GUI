@@ -194,7 +194,7 @@ class NeuralWorld:
         self._capacity = new_capacity
 
     def _register_single(self, obj: Object, parent_index: int = -1) -> int:
-        corner_radius = min(obj.width, obj.height) * self._DEFAULT_CORNER_RADIUS_FACTOR
+        corner_radius = min(obj.width / 2.0, obj.height / 2.0) * self._DEFAULT_CORNER_RADIUS_FACTOR
         row = [
             obj.x,
             obj.y,
@@ -690,6 +690,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
     _INITIAL_INSTANCE_DATA_BUFFER_SIZE = 20 * 1024
     _INITIAL_INSTANCE_COLOR_BUFFER_SIZE = 12 * 1024
     _SHADER_MIN_SOFTNESS = 0.0005
+    _SHADER_MIN_INNER_SIZE = 0.0005
     _SHADER_GLOW_FALLOFF = 10.0
     _SHADER_GLOW_INTENSITY = 0.35
     _SHADER_SHADOW_OFFSET = 2.0
@@ -855,7 +856,7 @@ class InstancedModernGLRenderer(ModernGLRenderer):
                 """
             ).substitute(
                 min_softness=self._SHADER_MIN_SOFTNESS,
-                min_inner_size=self._SHADER_MIN_SOFTNESS,
+                min_inner_size=self._SHADER_MIN_INNER_SIZE,
                 glow_falloff=self._SHADER_GLOW_FALLOFF,
                 glow_intensity=self._SHADER_GLOW_INTENSITY,
                 shadow_offset=self._SHADER_SHADOW_OFFSET,
