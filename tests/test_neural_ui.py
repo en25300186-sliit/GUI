@@ -1,6 +1,7 @@
 import unittest
 
-from neural_ui import NeuralWorld, Object, ObjectGroup, ObjectState, SpriteObject
+import neural_ui
+from neural_ui import InstancedModernGLRenderer, NeuralWorld, Object, ObjectGroup, ObjectState, SpriteObject, TextureManager
 
 
 class NeuralWorldTests(unittest.TestCase):
@@ -288,8 +289,6 @@ class NeuralWorldTests(unittest.TestCase):
                 self._sprite_configured = {}
 
         renderer = FakeRenderer()
-        from neural_ui import InstancedModernGLRenderer
-
         InstancedModernGLRenderer._sync_sprite_costumes(renderer)
 
         self.assertEqual(obj._texture_layers, [7, 8])
@@ -300,6 +299,61 @@ class NeuralWorldTests(unittest.TestCase):
         else:
             self.assertEqual(float(world._animation_fps[idx]), 4.0)
             self.assertEqual(float(world._animation_frame_count[idx]), 2.0)
+
+    def test_texture_manager_resizes_images_to_first_layer_dimensions(self):
+        if neural_ui.np is None:
+            self.skipTest("TextureManager resizing requires numpy")
+        manager = TextureManager(ctx=None)
+        source_layers = {
+            "/tmp/frame0.png": neural_ui.np.zeros((4, 4, 4), dtype=neural_ui.np.uint8),
+            "/tmp/frame1.png": neural_ui.np.zeros((2, 2, 4), dtype=neural_ui.np.uint8),
+        }
+        manager._load_rgba_pixels = lambda path: source_layers[path]  # type: ignore[method-assign]
+
+        first = manager.register_image("/tmp/frame0.png")
+        second = manager.register_image("/tmp/frame1.png")
+
+        self.assertEqual(first, 0)
+        self.assertEqual(second, 1)
+        self.assertEqual(manager.layer_count, 2)
+        self.assertEqual(manager._layer_pixels[1].shape, (4, 4, 4))
+
+    def test_object_with_costumes_reconfigures_when_assets_change(self):
+        class FakeTextureManager:
+            layer_count = 4
+
+            def __init__(self):
+                self.register_calls = 0
+
+            def register_images(self, image_paths):
+                self.register_calls += 1
+                return [10, 11] if self.register_calls == 1 else [20, 21]
+
+            def register_spritesheet(self, image_path, cols, rows):
+                return [0]
+
+            def bind(self, location=0):
+                pass
+
+        world = NeuralWorld(use_cupy=False)
+        obj = Object(x=0.0, y=0.0, width=1.0, height=1.0, costumes=["frame0.png", "frame1.png"], fps=3.0)
+        idx = world.register(obj)
+
+        class FakeRenderer:
+            def __init__(self):
+                self.world = world
+                self._texture_manager = FakeTextureManager()
+                self._sprite_configured = {}
+
+        renderer = FakeRenderer()
+        InstancedModernGLRenderer._sync_sprite_costumes(renderer)
+        self.assertEqual(obj._texture_layers, [10, 11])
+        self.assertEqual(world.global_row(idx)[NeuralWorld._ROW_COSTUME_ID], 10.0)
+
+        obj.costumes = ["idle0.png", "idle1.png"]
+        InstancedModernGLRenderer._sync_sprite_costumes(renderer)
+        self.assertEqual(obj._texture_layers, [20, 21])
+        self.assertEqual(world.global_row(idx)[NeuralWorld._ROW_COSTUME_ID], 20.0)
 
 
 if __name__ == "__main__":
